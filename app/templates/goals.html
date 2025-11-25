@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block title %}Цели - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-bullseye me-2"></i>Цели</h2>
+    <a href="{{ url_for('add_goal') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-2"></i>Создать цель
+    </a>
+  </div>
+
+  {% if goals_progress %}
+    <div class="row g-4">
+    {% for item in goals_progress %}
+        <div class="col-md-6 col-lg-4">
+          <div class="card goal-card">
+          <div class="card-body">
+              <div class="d-flex justify-content-between align-items-start mb-3">
+                <div>
+                  <h5 class="mb-1">{{ item.goal.name }}</h5>
+                  {% if item.goal.notes %}
+                    <p class="text-muted small mb-0">{{ item.goal.notes }}</p>
+                  {% endif %}
+                </div>
+                {% if item.goal.active %}
+                  <span class="badge bg-success">Активна</span>
+                {% else %}
+                  <span class="badge bg-secondary">Неактивна</span>
+                {% endif %}
+              </div>
+
+              <div class="mb-3">
+                <div class="d-flex justify-content-between mb-2">
+                  <span class="text-muted">Прогресс</span>
+                  <strong>{{ "%.0f"|format(item.percent) }}%</strong>
+                </div>
+                <div class="progress" style="height: 20px;">
+                  <div class="progress-bar {% if item.percent >= 100 %}bg-success{% elif item.percent >= 75 %}bg-primary{% elif item.percent >= 50 %}bg-info{% else %}bg-warning{% endif %}" 
+                       role="progressbar" style="width: {{ item.percent }}%">
+                    {{ "%.0f"|format(item.percent) }}%
+                  </div>
+                </div>
+              </div>
+
+              <div class="row text-center mb-3">
+                <div class="col-6">
+                  <div class="border-end">
+                    <div class="text-muted small">Имеется</div>
+                    <div class="fw-bold text-success">{{ "%.2f"|format(item.progress) }} {{ currency }}</div>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="text-muted small">Цель</div>
+                  <div class="fw-bold">{{ "%.2f"|format(item.goal.target_amount) }} {{ currency }}</div>
+                </div>
+              </div>
+
+              {% if item.remaining > 0 %}
+                <div class="alert alert-info mb-3">
+                  <i class="bi bi-info-circle me-2"></i>
+                  Осталось: <strong>{{ "%.2f"|format(item.remaining) }} {{ currency }}</strong>
+                </div>
+              {% elif item.percent >= 100 %}
+                <div class="alert alert-success mb-3">
+                  <i class="bi bi-check-circle me-2"></i>
+                  <strong>Цель достигнута!</strong>
+                </div>
+              {% endif %}
+
+              {% if item.goal.target_date %}
+                <div class="mb-3">
+                  <small class="text-muted">
+                    <i class="bi bi-calendar me-1"></i>
+                    Целевая дата: {{ item.goal.target_date.strftime("%d.%m.%Y") }}
+                    {% if item.days_remaining is not none %}
+                      {% if item.days_remaining > 0 %}
+                        <span class="text-warning">({{ item.days_remaining }} дн. осталось)</span>
+                      {% elif item.days_remaining == 0 %}
+                        <span class="text-warning">(сегодня!)</span>
+                      {% else %}
+                        <span class="text-danger">(просрочено на {{ -item.days_remaining }} дн.)</span>
+                      {% endif %}
+                    {% endif %}
+                  </small>
+                </div>
+              {% endif %}
+
+              <div class="btn-group w-100">
+                <a href="{{ url_for('edit_goal', goal_id=item.goal.id) }}" class="btn btn-outline-primary btn-sm">
+                  <i class="bi bi-pencil me-1"></i>Редактировать
+                </a>
+                <form method="POST" action="{{ url_for('delete_goal', goal_id=item.goal.id) }}" class="d-inline"
+                      onsubmit="return confirm('Удалить цель?');">
+                  <button type="submit" class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-trash me-1"></i>Удалить
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card">
+      <div class="card-body text-center py-5">
+        <i class="bi bi-bullseye fs-1 text-muted"></i>
+        <p class="text-muted mt-3">Нет целей</p>
+        <a href="{{ url_for('add_goal') }}" class="btn btn-primary">Создать первую цель</a>
+      </div>
+    </div>
+  {% endif %}
+  </div>
+{% endblock %}

@@ -1,0 +1,411 @@
+{% extends "base.html" %}
+
+{% block title %}Главная - Личный бюджет{% endblock %}
+
+{% block content %}
+{% if current_user %}
+<div class="animate-fade-in">
+  <!-- Статистические карточки -->
+  <div class="row g-4 mb-4">
+    <div class="col-md-3 col-sm-6">
+      <div class="stat-card">
+        <div class="stat-label">Общий баланс</div>
+        <div class="stat-value" style="color: {% if balance >= 0 %}#3fb950{% else %}#f85149{% endif %}">
+          {{ "%.2f"|format(balance) }} {{ currency }}
+        </div>
+        <small class="text-muted">
+          <i class="bi bi-arrow-up-circle text-success"></i> Доходы: <strong>{{ "%.2f"|format(income) }}</strong>
+        </small>
+      </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+      <div class="stat-card">
+        <div class="stat-label">Доходы (всего)</div>
+        <div class="stat-value text-success">{{ "%.2f"|format(income) }} {{ currency }}</div>
+        <small class="text-muted">За месяц: <strong>{{ "%.2f"|format(month_income) }}</strong></small>
+      </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+      <div class="stat-card">
+        <div class="stat-label">Расходы (всего)</div>
+        <div class="stat-value text-danger">{{ "%.2f"|format(expense) }} {{ currency }}</div>
+        <small class="text-muted">За месяц: <strong>{{ "%.2f"|format(month_expense) }}</strong></small>
+      </div>
+    </div>
+    <div class="col-md-3 col-sm-6">
+      <div class="stat-card">
+        <div class="stat-label">Счета</div>
+        <div class="stat-value">{{ "%.2f"|format(total_accounts_balance) }} {{ currency }}</div>
+        <small class="text-muted"><strong>{{ accounts|length }}</strong> активных счёта</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Уведомления -->
+  {% if unread_notifications|default([])|length > 0 %}
+    <div class="row g-4 mb-4">
+      <div class="col-12">
+        <div class="card border-warning">
+          <div class="card-header bg-warning bg-opacity-25">
+            <h5 class="mb-0"><i class="bi bi-bell-fill me-2"></i>Уведомления</h5>
+          </div>
+          <div class="card-body">
+            {% for notif in unread_notifications %}
+              <div class="alert alert-warning mb-2">
+                <strong>{{ notif.title }}</strong><br>
+                <small>{{ notif.message }}</small>
+              </div>
+            {% endfor %}
+            <a href="{{ url_for('notifications') }}" class="btn btn-sm btn-outline-warning">Все уведомления</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <!-- Сравнение с прошлым месяцем -->
+  <div class="row g-4 mb-4">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Сравнение с прошлым месяцем</h6>
+        </div>
+        <div class="card-body">
+          <div class="row text-center">
+            <div class="col-6">
+              <div class="text-muted small">Доходы</div>
+              <div class="fw-bold {% if month_income > last_month_income %}text-success{% elif month_income < last_month_income %}text-danger{% endif %}">
+                {{ "%.2f"|format(month_income) }} {{ currency }}
+              </div>
+              <small class="text-muted">
+                {% if last_month_income > 0 %}
+                  {% set diff = ((month_income - last_month_income) / last_month_income * 100) %}
+                  {% if diff > 0 %}+{% endif %}{{ "%.1f"|format(diff) }}%
+                {% endif %}
+              </small>
+            </div>
+            <div class="col-6">
+              <div class="text-muted small">Расходы</div>
+              <div class="fw-bold {% if month_expense < last_month_expense %}text-success{% elif month_expense > last_month_expense %}text-danger{% endif %}">
+                {{ "%.2f"|format(month_expense) }} {{ currency }}
+              </div>
+              <small class="text-muted">
+                {% if last_month_expense > 0 %}
+                  {% set diff = ((month_expense - last_month_expense) / last_month_expense * 100) %}
+                  {% if diff > 0 %}+{% endif %}{{ "%.1f"|format(diff) }}%
+                {% endif %}
+              </small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">Топ-5 самых дорогих расходов</h6>
+        </div>
+        <div class="card-body">
+          {% if top_expenses|default([])|length > 0 %}
+            <div class="list-group list-group-flush">
+              {% for t in top_expenses[:5] %}
+                <div class="list-group-item bg-transparent border-secondary d-flex justify-content-between align-items-center">
+                  <div>
+                    <strong>{{ t.category.name if t.category else "Без категории" }}</strong><br>
+                    <small class="text-muted">{{ t.date.strftime("%d.%m.%Y") }}</small>
+                  </div>
+                  <span class="badge bg-danger">{{ "%.2f"|format(t.amount) }} {{ currency }}</span>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="text-muted text-center mb-0">Нет данных</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <!-- График доходов/расходов -->
+    <div class="col-lg-8">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-graph-up me-2"></i>Тренды за 6 месяцев</h5>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="trendsChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Активные цели -->
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0"><i class="bi bi-bullseye me-2"></i>Активные цели</h5>
+          <a href="{{ url_for('add_goal') }}" class="btn btn-sm btn-primary">
+            <i class="bi bi-plus"></i>
+          </a>
+        </div>
+        <div class="card-body">
+          {% if goals_data %}
+            {% for item in goals_data[:3] %}
+              <div class="goal-card mb-3">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                  <div>
+                    <h6 class="mb-1">{{ item.goal.name }}</h6>
+                    <small class="text-muted">{{ "%.2f"|format(item.progress) }} / {{ "%.2f"|format(item.goal.target_amount) }} {{ currency }}</small>
+                  </div>
+                  <span class="badge bg-primary">{{ "%.0f"|format(item.percent) }}%</span>
+                </div>
+                <div class="progress goal-progress">
+                  <div class="progress-bar" role="progressbar" style="width: {{ item.percent }}%"></div>
+                </div>
+                {% if item.goal.target_date %}
+                  <small class="text-muted mt-2 d-block">
+                    <i class="bi bi-calendar"></i> До цели: {{ item.days_remaining }} дн.
+                  </small>
+                {% endif %}
+              </div>
+            {% endfor %}
+            {% if goals_data|length > 3 %}
+              <a href="{{ url_for('goals') }}" class="btn btn-sm btn-outline-primary w-100">
+                Показать все ({{ goals_data|length }})
+              </a>
+            {% endif %}
+          {% else %}
+            <p class="text-muted text-center">Нет активных целей</p>
+            <a href="{{ url_for('add_goal') }}" class="btn btn-primary w-100">Создать цель</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-2">
+    <!-- Бюджеты -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0"><i class="bi bi-piggy-bank me-2"></i>Текущие бюджеты</h5>
+          <a href="{{ url_for('add_budget') }}" class="btn btn-sm btn-primary">
+            <i class="bi bi-plus"></i>
+          </a>
+        </div>
+        <div class="card-body">
+          {% if budgets_data %}
+            {% for item in budgets_data[:3] %}
+              <div class="budget-card {% if item.percent >= 100 %}over-budget{% elif item.percent >= 80 %}near-limit{% endif %}">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                  <div>
+                    <h6 class="mb-1">{{ item.budget.category.name }}</h6>
+                    <small class="text-muted">
+                      Потрачено: {{ "%.2f"|format(item.spent) }} / {{ "%.2f"|format(item.budget.amount) }} {{ currency }}
+                    </small>
+                  </div>
+                  <span class="badge {% if item.percent >= 100 %}bg-danger{% elif item.percent >= 80 %}bg-warning{% else %}bg-primary{% endif %}">
+                    {{ "%.0f"|format(item.percent) }}%
+                  </span>
+                </div>
+                <div class="progress">
+                  <div class="progress-bar {% if item.percent >= 100 %}bg-danger{% elif item.percent >= 80 %}bg-warning{% else %}{% endif %}" 
+                       role="progressbar" style="width: {{ item.percent }}%"></div>
+                </div>
+                <small class="text-muted mt-2 d-block">
+                  Осталось: {{ "%.2f"|format(item.remaining) }} {{ currency }}
+                </small>
+              </div>
+            {% endfor %}
+            {% if budgets_data|length > 3 %}
+              <a href="{{ url_for('budgets') }}" class="btn btn-sm btn-outline-primary w-100">
+                Показать все ({{ budgets_data|length }})
+              </a>
+            {% endif %}
+          {% else %}
+            <p class="text-muted text-center">Нет активных бюджетов</p>
+            <a href="{{ url_for('add_budget') }}" class="btn btn-primary w-100">Создать бюджет</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Последние операции -->
+    <div class="col-lg-6">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Последние операции</h5>
+          <a href="{{ url_for('transactions') }}" class="btn btn-sm btn-outline-primary">Все</a>
+        </div>
+        <div class="card-body">
+          {% if recent_transactions %}
+            <div class="table-responsive">
+              <table class="table table-sm table-dark mb-0">
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th>Сумма</th>
+                    <th>Категория</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for t in recent_transactions %}
+                    <tr>
+                      <td>{{ t.date.strftime("%d.%m") }}</td>
+                      <td>
+                        <span class="badge {% if t.type.value == 'income' %}bg-success{% else %}bg-danger{% endif %}">
+                          {% if t.type.value == 'income' %}+{% else %}-{% endif %}{{ "%.2f"|format(t.amount) }}
+                        </span>
+                      </td>
+                      <td>
+                        {% if t.category %}
+                          <span class="badge bg-secondary">{{ t.category.name }}</span>
+                        {% else %}
+                          <span class="text-muted">—</span>
+                        {% endif %}
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="text-muted text-center">Нет операций</p>
+            <a href="{{ url_for('add_transaction') }}" class="btn btn-primary w-100">Добавить операцию</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- График по категориям -->
+  <div class="row g-4 mt-2">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Расходы по категориям (текущий месяц)</h5>
+        </div>
+        <div class="card-body">
+          <div class="chart-container" style="height: 400px;">
+            <canvas id="categoriesChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+ </div>
+{% else %}
+<div class="d-flex flex-column align-items-center justify-content-center py-5 text-center animate-fade-in">
+  <div class="col-12 col-md-8 col-lg-6">
+    <h1 class="display-5 fw-bold mb-3">Личный бюджет под вашим контролем</h1>
+    <p class="text-muted mb-4">
+      Отслеживайте расходы, ставьте цели, планируйте бюджеты и управляйте финансами в одном месте.
+      Создайте аккаунт, чтобы начать вести свой финансовый дневник.
+    </p>
+    <div class="d-flex flex-column flex-sm-row justify-content-center gap-3 mb-4">
+      <a class="btn btn-primary btn-lg px-4" href="{{ url_for('register') }}">
+        <i class="bi bi-person-plus me-2"></i>Зарегистрироваться
+      </a>
+      <a class="btn btn-outline-light btn-lg px-4" href="{{ url_for('login') }}">
+        <i class="bi bi-box-arrow-in-right me-2"></i>Войти
+      </a>
+    </div>
+    <div class="row g-3 text-start">
+      <div class="col-sm-6">
+        <div class="p-3 border border-secondary rounded-3 h-100">
+          <h5><i class="bi bi-graph-up-arrow me-2 text-success"></i>Аналитика и отчёты</h5>
+          <p class="text-muted mb-0">Графики, тренды и уведомления помогут держать финансы под контролем.</p>
+        </div>
+      </div>
+      <div class="col-sm-6">
+        <div class="p-3 border border-secondary rounded-3 h-100">
+          <h5><i class="bi bi-lock-fill me-2 text-info"></i>Личные данные</h5>
+          <p class="text-muted mb-0">Все операции и настройки доступны только после входа в аккаунт.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // График трендов
+  fetch('/api/chart/trends')
+    .then(response => response.json())
+    .then(data => {
+      const ctx = document.getElementById('trendsChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: data.map(d => d.label),
+          datasets: [{
+            label: 'Доходы',
+            data: data.map(d => d.income),
+            borderColor: '#3fb950',
+            backgroundColor: 'rgba(63, 185, 80, 0.1)',
+            tension: 0.4,
+            fill: true
+          }, {
+            label: 'Расходы',
+            data: data.map(d => d.expense),
+            borderColor: '#f85149',
+            backgroundColor: 'rgba(248, 81, 73, 0.1)',
+            tension: 0.4,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: { color: '#c9d1d9' }
+            }
+          },
+          scales: {
+            x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+            y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
+          }
+        }
+      });
+    });
+
+  // График по категориям
+  const today = new Date();
+  fetch(`/api/chart/categories?month=${today.getMonth() + 1}&year=${today.getFullYear()}`)
+    .then(response => response.json())
+    .then(data => {
+      const ctx = document.getElementById('categoriesChart').getContext('2d');
+      const colors = [
+        '#58a6ff', '#3fb950', '#f85149', '#d29922', '#bc8cff',
+        '#79c0ff', '#56d364', '#ffa198', '#e3b341', '#a5a5ff'
+      ];
+      new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: Object.keys(data),
+          datasets: [{
+            data: Object.values(data),
+            backgroundColor: colors.slice(0, Object.keys(data).length),
+            borderWidth: 2,
+            borderColor: '#0d1117'
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'right',
+              labels: { color: '#c9d1d9', padding: 15 }
+            }
+          }
+        }
+      });
+    });
+</script>
+{% endblock %}

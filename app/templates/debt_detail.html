@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+
+{% block title %}{{ debt.name }} - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2><i class="bi bi-cash-coin me-2"></i>{{ debt.name }}</h2>
+      <span class="badge {% if debt.debt_type.value == 'credit' %}bg-primary
+                         {% elif debt.debt_type.value == 'credit_card' %}bg-info
+                         {% else %}bg-secondary{% endif %}">
+        {% if debt.debt_type.value == 'credit' %}
+          <i class="bi bi-bank"></i> Кредит
+        {% elif debt.debt_type.value == 'credit_card' %}
+          <i class="bi bi-credit-card"></i> Кредитная карта
+        {% else %}
+          <i class="bi bi-cash-coin"></i> Долг
+        {% endif %}
+      </span>
+    </div>
+    <div>
+      <a href="{{ url_for('edit_debt', debt_id=debt.id) }}" class="btn btn-outline-primary">
+        <i class="bi bi-pencil me-1"></i>Редактировать
+      </a>
+      <a href="{{ url_for('debts') }}" class="btn btn-secondary">
+        <i class="bi bi-arrow-left me-1"></i>Назад
+      </a>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <!-- Основная информация -->
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-info-circle me-2"></i>Информация</h5>
+        </div>
+        <div class="card-body">
+          {% if debt.debt_type.value == 'credit_card' %}
+            <!-- Для кредитки -->
+            <div class="row mb-4">
+              <div class="col-md-4 text-center">
+                <div class="text-muted small mb-2">Лимит</div>
+                <h4>{{ "%.2f"|format(debt.credit_limit or debt.amount) }} {{ currency }}</h4>
+              </div>
+              <div class="col-md-4 text-center">
+                <div class="text-muted small mb-2">Текущий баланс</div>
+                <h4 class="text-danger">{{ "%.2f"|format(debt.current_balance or 0) }} {{ currency }}</h4>
+              </div>
+              <div class="col-md-4 text-center">
+                <div class="text-muted small mb-2">Доступно</div>
+                <h4 class="text-success">{{ "%.2f"|format(debt.available_credit) }} {{ currency }}</h4>
+              </div>
+            </div>
+            <div class="mb-4">
+              <div class="d-flex justify-content-between mb-2">
+                <span>Использование кредита</span>
+                <span><strong>{{ "%.1f"|format(debt.utilization_rate) }}%</strong></span>
+              </div>
+              <div class="progress" style="height: 30px;">
+                {% set util_rate = debt.utilization_rate %}
+                <div class="progress-bar {% if util_rate > 80 %}bg-danger{% elif util_rate > 50 %}bg-warning{% else %}bg-success{% endif %}" 
+                     role="progressbar" style="width: {{ util_rate }}%">
+                  {{ "%.0f"|format(util_rate) }}%
+                </div>
+              </div>
+            </div>
+          {% else %}
+            <!-- Для кредита/долга -->
+            <div class="row mb-4">
+              <div class="col-md-4 text-center">
+                <div class="text-muted small mb-2">Общая сумма</div>
+                <h4>{{ "%.2f"|format(debt.amount) }} {{ currency }}</h4>
+              </div>
+              <div class="col-md-4 text-center">
+                <div class="text-muted small mb-2">Выплачено</div>
+                <h4 class="text-success">{{ "%.2f"|format(debt.paid_amount) }} {{ currency }}</h4>
+              </div>
+              <div class="col-md-4 text-center">
+                <div class="text-muted small mb-2">Осталось</div>
+                <h4 class="{% if debt.remaining_amount > 0 %}text-warning{% else %}text-success{% endif %}">
+                  {{ "%.2f"|format(debt.remaining_amount) }} {{ currency }}
+                </h4>
+              </div>
+            </div>
+            <div class="mb-4">
+              <div class="d-flex justify-content-between mb-2">
+                <span>Прогресс погашения</span>
+                <span><strong>{{ "%.1f"|format((debt.paid_amount / debt.amount * 100) if debt.amount > 0 else 0) }}%</strong></span>
+              </div>
+              <div class="progress" style="height: 30px;">
+                {% set paid_percent = (debt.paid_amount / debt.amount * 100) if debt.amount > 0 else 0 %}
+                <div class="progress-bar bg-success" role="progressbar" style="width: {{ paid_percent }}%">
+                  {{ "%.0f"|format(paid_percent) }}%
+                </div>
+              </div>
+            </div>
+          {% endif %}
+
+          <hr>
+
+          <div class="row">
+            {% if debt.interest_rate %}
+              <div class="col-md-6 mb-3">
+                <strong>Процентная ставка:</strong><br>
+                <span class="text-muted">{{ "%.2f"|format(debt.interest_rate) }}% годовых</span>
+              </div>
+            {% endif %}
+            {% if debt.payment_date %}
+              <div class="col-md-6 mb-3">
+                <strong>Следующий платёж:</strong><br>
+                <span class="text-muted">
+                  {{ debt.payment_date.strftime("%d.%m.%Y") }}
+                  {% if debt.payment_amount %}
+                    ({{ "%.2f"|format(debt.payment_amount) }} {{ currency }})
+                  {% endif %}
+                  {% if days_until_payment is not none %}
+                    {% if days_until_payment < 0 %}
+                      <span class="badge bg-danger">Просрочено на {{ -days_until_payment }} дн.</span>
+                    {% elif days_until_payment == 0 %}
+                      <span class="badge bg-warning">Сегодня!</span>
+                    {% elif days_until_payment <= 7 %}
+                      <span class="badge bg-warning">Через {{ days_until_payment }} дн.</span>
+                    {% else %}
+                      <span class="badge bg-info">Через {{ days_until_payment }} дн.</span>
+                    {% endif %}
+                  {% endif %}
+                </span>
+              </div>
+            {% endif %}
+            {% if debt.min_payment %}
+              <div class="col-md-6 mb-3">
+                <strong>Минимальный платёж:</strong><br>
+                <span class="text-muted">{{ "%.2f"|format(debt.min_payment) }} {{ currency }}</span>
+              </div>
+            {% endif %}
+            {% if debt.due_date %}
+              <div class="col-md-6 mb-3">
+                <strong>Срок возврата:</strong><br>
+                <span class="text-muted">
+                  {{ debt.due_date.strftime("%d.%m.%Y") }}
+                  {% set days_left = (debt.due_date.date() - today).days %}
+                  {% if days_left < 0 %}
+                    <span class="badge bg-danger">Просрочено на {{ -days_left }} дн.</span>
+                  {% elif days_left == 0 %}
+                    <span class="badge bg-warning">Сегодня!</span>
+                  {% else %}
+                    <span class="badge bg-info">{{ days_left }} дн. осталось</span>
+                  {% endif %}
+                </span>
+              </div>
+            {% endif %}
+            {% if debt.account %}
+              <div class="col-md-6 mb-3">
+                <strong>Привязанный счёт:</strong><br>
+                <span class="text-muted">{{ debt.account.name }}</span>
+              </div>
+            {% endif %}
+          </div>
+
+          {% if debt.notes %}
+            <hr>
+            <div>
+              <strong>Примечание:</strong><br>
+              <p class="text-muted">{{ debt.notes }}</p>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Платежи -->
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-cash-stack me-2"></i>Внести платёж</h5>
+        </div>
+        <div class="card-body">
+          <form method="POST" action="{{ url_for('make_payment', debt_id=debt.id) }}">
+            <div class="mb-3">
+              <label class="form-label">Сумма платежа</label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                <input type="number" name="amount" class="form-control" step="0.01" min="0.01" required
+                       value="{{ debt.payment_amount or debt.min_payment or '' }}">
+              </div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Дата платежа</label>
+              <input type="date" name="date" class="form-control" 
+                     value="{{ today.isoformat() }}" required>
+            </div>
+            <div class="mb-3">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" name="create_transaction" id="createTransaction" checked>
+                <label class="form-check-label" for="createTransaction">
+                  Создать транзакцию расхода
+                </label>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary w-100">
+              <i class="bi bi-check-circle me-1"></i>Внести платёж
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

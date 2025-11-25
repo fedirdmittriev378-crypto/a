@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Шаблоны операций - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-file-earmark-text me-2"></i>Шаблоны операций</h2>
+    <a href="{{ url_for('add_template') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-2"></i>Создать шаблон
+    </a>
+  </div>
+
+  {% if templates %}
+    <div class="row g-4">
+      {% for t in templates %}
+        <div class="col-md-6 col-lg-4">
+          <div class="card">
+            <div class="card-body">
+              <h5 class="mb-2">{{ t.name }}</h5>
+              <div class="mb-2">
+                <span class="badge {% if t.type.value == 'income' %}bg-success{% else %}bg-danger{% endif %}">
+                  {% if t.type.value == 'income' %}Доход{% else %}Расход{% endif %}
+                </span>
+                <span class="badge bg-primary ms-1">{{ "%.2f"|format(t.amount) }} {{ currency }}</span>
+              </div>
+              {% if t.category %}
+                <p class="mb-2"><small>Категория: <strong>{{ t.category.name }}</strong></small></p>
+              {% endif %}
+              {% if t.account %}
+                <p class="mb-2"><small>Счёт: <strong>{{ t.account.name }}</strong></small></p>
+              {% endif %}
+              {% if t.note %}
+                <p class="mb-2 text-muted small">{{ t.note }}</p>
+              {% endif %}
+              <div class="d-flex justify-content-between align-items-center mt-3">
+                <small class="text-muted">Использовано: {{ t.use_count }} раз</small>
+                <div class="btn-group btn-group-sm">
+                  <form method="POST" action="{{ url_for('use_template', template_id=t.id) }}" class="d-inline">
+                    <button type="submit" class="btn btn-success">
+                      <i class="bi bi-play-fill"></i> Использовать
+                    </button>
+                  </form>
+                  <form method="POST" action="{{ url_for('delete_template', template_id=t.id) }}" class="d-inline"
+                        onsubmit="return confirm('Удалить шаблон?');">
+                    <button type="submit" class="btn btn-outline-danger">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card">
+      <div class="card-body text-center py-5">
+        <i class="bi bi-file-earmark-text fs-1 text-muted"></i>
+        <p class="text-muted mt-3">Нет шаблонов</p>
+        <a href="{{ url_for('add_template') }}" class="btn btn-primary">Создать первый шаблон</a>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
+

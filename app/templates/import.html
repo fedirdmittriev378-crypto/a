@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Импорт CSV - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <div class="card animate-fade-in">
+      <div class="card-header">
+        <h4 class="mb-0"><i class="bi bi-upload me-2"></i>Импорт операций из CSV</h4>
+      </div>
+      <div class="card-body">
+        <form method="POST" enctype="multipart/form-data">
+          {{ form.hidden_tag() }}
+          
+          <div class="mb-3">
+            {{ form.csv_file.label(class="form-label") }}
+            {{ form.csv_file(class="form-control") }}
+            <small class="text-muted d-block mt-2">
+              CSV файл должен содержать столбцы: <code>date</code>, <code>amount</code>, <code>type</code>
+              <br>Опционально: <code>category</code>, <code>note</code>
+            </small>
+          </div>
+
+          <div class="alert alert-info">
+            <i class="bi bi-info-circle me-2"></i>
+            <strong>Формат CSV:</strong>
+            <ul class="mb-0 mt-2">
+              <li><code>date</code> - дата в формате YYYY-MM-DD</li>
+              <li><code>amount</code> - сумма (число)</li>
+              <li><code>type</code> - тип: "income" или "expense"</li>
+              <li><code>category</code> - название категории (будет создана, если не существует)</li>
+              <li><code>note</code> - примечание</li>
+            </ul>
+          </div>
+
+          <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+            <a href="{{ url_for('transactions') }}" class="btn btn-secondary">Отмена</a>
+            {{ form.submit(class="btn btn-primary") }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

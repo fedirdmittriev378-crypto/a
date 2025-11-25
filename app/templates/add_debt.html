@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+
+{% block title %}{% if edit %}Редактировать{% else %}Добавить{% endif %} долг/кредит - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-10">
+    <div class="card animate-fade-in">
+      <div class="card-header">
+        <h4 class="mb-0">
+          <i class="bi bi-{% if edit %}pencil{% else %}plus-circle{% endif %} me-2"></i>
+          {% if edit %}Редактировать долг/кредит{% else %}Добавить долг/кредит{% endif %}
+        </h4>
+      </div>
+      <div class="card-body">
+        <form method="POST" id="debtForm">
+          {{ form.hidden_tag() }}
+          
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              {{ form.name.label(class="form-label") }}
+              {{ form.name(class="form-control", placeholder="Например: Кредит в Сбербанке") }}
+            </div>
+            <div class="col-md-6 mb-3">
+              {{ form.debt_type.label(class="form-label") }}
+              <div class="btn-group w-100" role="group">
+                {% for value, label in form.debt_type.choices %}
+                  <input type="radio" class="btn-check" name="{{ form.debt_type.name }}" id="type_{{ value }}" value="{{ value }}" 
+                         {% if form.debt_type.data == value or (not form.debt_type.data and value == 'debt') %}checked{% endif %}>
+                  <label class="btn {% if form.debt_type.data == value or (not form.debt_type.data and value == 'debt') %}btn-primary{% else %}btn-outline-primary{% endif %}" 
+                         for="type_{{ value }}">
+                    {% if value == 'debt' %}
+                      <i class="bi bi-cash-coin me-1"></i>Долг
+                    {% elif value == 'credit' %}
+                      <i class="bi bi-bank me-1"></i>Кредит
+                    {% else %}
+                      <i class="bi bi-credit-card me-1"></i>Кредитка
+                    {% endif %}
+                  </label>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+
+          <!-- Поля для обычного долга -->
+          <div class="row" id="debtFields">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Сумма долга <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.amount(class="form-control", id="debtAmountField") }}
+              </div>
+              <small class="text-muted">Общая сумма долга</small>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Выплачено <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.paid_amount(class="form-control", id="debtPaidField") }}
+              </div>
+              <small class="text-muted">Уже выплачено</small>
+            </div>
+          </div>
+
+          <!-- Поля для кредитной карты -->
+          <div class="row" id="creditCardFields" style="display: none;">
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Лимит кредитной карты <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.credit_limit(class="form-control", id="creditLimitField") }}
+              </div>
+              <small class="text-muted">Максимальный лимит</small>
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Текущий баланс</label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.current_balance(class="form-control", id="currentBalanceField", value="0") }}
+              </div>
+              <small class="text-muted">Сколько потрачено</small>
+            </div>
+            <div class="col-md-4 mb-3">
+              <label class="form-label">Привязка к счёту</label>
+              {{ form.account(class="form-select", id="accountField") }}
+              <small class="text-muted">Опционально</small>
+            </div>
+            <!-- Скрытое поле amount для совместимости -->
+            {{ form.amount(class="form-control", id="creditCardAmountField", style="display: none;") }}
+            {{ form.paid_amount(class="form-control", id="creditCardPaidField", value="0", style="display: none;") }}
+          </div>
+
+          <!-- Поля для кредита -->
+          <div class="row" id="creditFields" style="display: none;">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Сумма кредита <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.amount(class="form-control", id="creditAmountField") }}
+              </div>
+              <small class="text-muted">Общая сумма кредита</small>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Выплачено <span class="text-danger">*</span></label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.paid_amount(class="form-control", id="creditPaidField") }}
+              </div>
+              <small class="text-muted">Уже выплачено</small>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Процентная ставка</label>
+              <div class="input-group">
+                {{ form.interest_rate(class="form-control", id="interestRateField") }}
+                <span class="input-group-text">% годовых</span>
+              </div>
+              <small class="text-muted">Опционально</small>
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Минимальный платёж</label>
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.min_payment(class="form-control", id="minPaymentField") }}
+              </div>
+              <small class="text-muted">Опционально</small>
+            </div>
+            <!-- Скрытые поля для кредитки -->
+            {{ form.credit_limit(class="form-control", id="creditLimitHidden", style="display: none;") }}
+            {{ form.current_balance(class="form-control", id="currentBalanceHidden", style="display: none;") }}
+          </div>
+
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              {{ form.payment_date.label(class="form-label") }}
+              {{ form.payment_date(class="form-control") }}
+              <small class="text-muted">Дата следующего платежа</small>
+            </div>
+            <div class="col-md-4 mb-3">
+              {{ form.payment_amount.label(class="form-label") }}
+              <div class="input-group">
+                <span class="input-group-text">{{ currency }}</span>
+                {{ form.payment_amount(class="form-control") }}
+              </div>
+              <small class="text-muted">Сумма следующего платежа</small>
+            </div>
+            <div class="col-md-4 mb-3" id="dueDateField">
+              {{ form.due_date.label(class="form-label") }}
+              {{ form.due_date(class="form-control") }}
+              <small class="text-muted">Срок возврата / окончание кредита</small>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.is_owed_to_me(class="form-check-input") }}
+              {{ form.is_owed_to_me.label(class="form-check-label") }}
+            </div>
+          </div>
+
+          <div class="mb-3">
+            {{ form.notes.label(class="form-label") }}
+            {{ form.notes(class="form-control", rows="3") }}
+          </div>
+
+          <div class="mb-3">
+            <div class="form-check">
+              {{ form.is_active(class="form-check-input") }}
+              {{ form.is_active.label(class="form-check-label") }}
+            </div>
+          </div>
+
+          <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+            <a href="{{ url_for('debts') }}" class="btn btn-secondary">Отмена</a>
+            {{ form.submit(class="btn btn-primary") }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function updateFormFields() {
+    const debtType = document.querySelector('input[name="debt_type"]:checked')?.value;
+    const debtFields = document.getElementById('debtFields');
+    const creditFields = document.getElementById('creditFields');
+    const creditCardFields = document.getElementById('creditCardFields');
+    const dueDateField = document.getElementById('dueDateField');
+    
+    // Получаем все поля формы
+    const debtAmountField = document.getElementById('debtAmountField');
+    const debtPaidField = document.getElementById('debtPaidField');
+    const creditAmountField = document.getElementById('creditAmountField');
+    const creditPaidField = document.getElementById('creditPaidField');
+    const creditLimitField = document.getElementById('creditLimitField');
+    const currentBalanceField = document.getElementById('currentBalanceField');
+    const accountField = document.getElementById('accountField');
+    const interestRateField = document.getElementById('interestRateField');
+    const minPaymentField = document.getElementById('minPaymentField');
+    const creditCardAmountField = document.getElementById('creditCardAmountField');
+    const creditCardPaidField = document.getElementById('creditCardPaidField');
+    
+    // Скрываем все группы полей
+    debtFields.style.display = 'none';
+    creditFields.style.display = 'none';
+    creditCardFields.style.display = 'none';
+    
+    // Скрываем поле "Срок окончания кредита" по умолчанию
+    if (dueDateField) {
+      dueDateField.style.display = 'none';
+    }
+    
+    // Сбрасываем required и значения
+    if (debtAmountField) {
+      debtAmountField.required = false;
+      debtAmountField.value = '';
+    }
+    if (debtPaidField) {
+      debtPaidField.required = false;
+      debtPaidField.value = '';
+    }
+    if (creditAmountField) {
+      creditAmountField.required = false;
+      creditAmountField.value = '';
+    }
+    if (creditPaidField) {
+      creditPaidField.required = false;
+      creditPaidField.value = '';
+    }
+    if (creditLimitField) {
+      creditLimitField.required = false;
+      creditLimitField.value = '';
+    }
+    if (currentBalanceField) {
+      currentBalanceField.required = false;
+      currentBalanceField.value = '0';
+    }
+    if (accountField) accountField.value = '0';
+    if (interestRateField) interestRateField.value = '';
+    if (minPaymentField) minPaymentField.value = '';
+    
+    // Показываем нужные поля в зависимости от типа
+    if (debtType === 'debt') {
+      // Обычный долг: только сумма и выплачено
+      debtFields.style.display = 'flex';
+      if (debtAmountField) debtAmountField.required = true;
+      if (debtPaidField) debtPaidField.required = true;
+      // Скрываем срок окончания для обычного долга
+      if (dueDateField) dueDateField.style.display = 'none';
+      
+    } else if (debtType === 'credit') {
+      // Кредит: сумма, выплачено, процентная ставка, минимальный платёж
+      creditFields.style.display = 'flex';
+      if (creditAmountField) creditAmountField.required = true;
+      if (creditPaidField) creditPaidField.required = true;
+      // Показываем срок окончания для кредита
+      if (dueDateField) dueDateField.style.display = 'block';
+      
+    } else if (debtType === 'credit_card') {
+      // Кредитная карта: лимит, текущий баланс, счёт
+      creditCardFields.style.display = 'flex';
+      if (creditLimitField) creditLimitField.required = true;
+      if (currentBalanceField) {
+        currentBalanceField.value = currentBalanceField.value || '0';
+      }
+      // Скрываем срок окончания для кредитной карты (бессрочная)
+      if (dueDateField) dueDateField.style.display = 'none';
+      
+      // Синхронизируем credit_limit с amount для совместимости
+      if (creditLimitField && creditCardAmountField) {
+        // Удаляем старые обработчики
+        const newCreditLimitField = creditLimitField.cloneNode(true);
+        creditLimitField.parentNode.replaceChild(newCreditLimitField, creditLimitField);
+        
+        newCreditLimitField.addEventListener('input', function() {
+          creditCardAmountField.value = this.value;
+        });
+      }
+    }
+  }
+
+  // Обновляем при изменении типа
+  document.querySelectorAll('input[name="debt_type"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+      document.querySelectorAll('label[for^="type_"]').forEach(label => {
+        label.classList.remove('btn-primary');
+        label.classList.add('btn-outline-primary');
+      });
+      if (this.checked) {
+        const label = document.querySelector(`label[for="${this.id}"]`);
+        label.classList.remove('btn-outline-primary');
+        label.classList.add('btn-primary');
+      }
+      updateFormFields();
+    });
+  });
+
+  // Инициализация при загрузке
+  document.addEventListener('DOMContentLoaded', function() {
+    updateFormFields();
+    
+    // Обработчик отправки формы - синхронизируем поля для кредитной карты
+    const debtForm = document.getElementById('debtForm');
+    if (debtForm) {
+      debtForm.addEventListener('submit', function(e) {
+        const debtType = document.querySelector('input[name="debt_type"]:checked')?.value;
+        
+        if (debtType === 'credit_card') {
+          // Для кредитной карты синхронизируем credit_limit с amount
+          const creditLimitField = document.getElementById('creditLimitField');
+          const creditCardAmountField = document.getElementById('creditCardAmountField');
+          const creditCardPaidField = document.getElementById('creditCardPaidField');
+          const currentBalanceField = document.getElementById('currentBalanceField');
+          
+          if (creditLimitField && creditCardAmountField) {
+            // amount = credit_limit для кредитной карты
+            creditCardAmountField.value = creditLimitField.value || '0';
+          }
+          
+          if (creditCardPaidField) {
+            // paid_amount = 0 для кредитной карты (не используется)
+            creditCardPaidField.value = '0';
+          }
+          
+          // Убеждаемся, что current_balance заполнен
+          if (currentBalanceField && !currentBalanceField.value) {
+            currentBalanceField.value = '0';
+          }
+        } else if (debtType === 'credit') {
+          // Для кредита синхронизируем credit_limit с amount, если credit_limit не заполнен
+          const creditAmountField = document.getElementById('creditAmountField');
+          const creditLimitField = document.getElementById('creditLimitHidden');
+          
+          if (creditAmountField && creditLimitField) {
+            creditLimitField.value = creditAmountField.value || '0';
+          }
+        }
+      });
+    }
+  });
+</script>
+{% endblock %}

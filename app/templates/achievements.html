@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Достижения - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <h2 class="mb-4"><i class="bi bi-trophy me-2"></i>Достижения</h2>
+
+  <div class="row g-4 mb-4">
+    <div class="col-md-4">
+      <div class="card stat-card">
+        <div class="card-body text-center">
+          <i class="bi bi-list-ul fs-1 text-primary"></i>
+          <h4 class="mt-2">{{ total_transactions }}</h4>
+          <p class="text-muted mb-0">Всего операций</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card stat-card">
+        <div class="card-body text-center">
+          <i class="bi bi-calendar-check fs-1 text-success"></i>
+          <h4 class="mt-2">{{ days_with_transactions }}</h4>
+          <p class="text-muted mb-0">Дней с операциями</p>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card stat-card">
+        <div class="card-body text-center">
+          <i class="bi bi-trophy fs-1 text-warning"></i>
+          <h4 class="mt-2">{{ achievements|selectattr('is_unlocked', 'equalto', True)|list|length }} / {{ achievements|length }}</h4>
+          <p class="text-muted mb-0">Достижений получено</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    {% for ach in achievements %}
+      <div class="col-md-6 col-lg-4">
+        <div class="card {% if ach.is_unlocked %}border-warning{% else %}border-secondary opacity-50{% endif %}">
+          <div class="card-body text-center">
+            <i class="bi {{ ach.icon }} fs-1 {% if ach.is_unlocked %}text-warning{% else %}text-muted{% endif %} mb-3"></i>
+            <h5 class="mb-2">{{ ach.name }}</h5>
+            <p class="text-muted small mb-2">{{ ach.description }}</p>
+            {% if ach.is_unlocked %}
+              <span class="badge bg-warning text-dark">
+                <i class="bi bi-check-circle me-1"></i>Получено
+              </span>
+              {% if ach.unlocked_at %}
+                <p class="text-muted small mt-2 mb-0">{{ ach.unlocked_at.strftime("%d.%m.%Y") }}</p>
+              {% endif %}
+            {% else %}
+              <span class="badge bg-secondary">Не получено</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
+

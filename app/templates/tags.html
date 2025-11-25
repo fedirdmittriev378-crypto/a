@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}Теги - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <div class="row">
+    <div class="col-md-4">
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-plus-circle me-2"></i>Добавить тег</h5>
+        </div>
+        <div class="card-body">
+          <form method="POST" action="{{ url_for('add_tag') }}">
+            {{ form.hidden_tag() }}
+            <div class="mb-3">
+              {{ form.name.label(class="form-label") }}
+              {{ form.name(class="form-control") }}
+            </div>
+            <div class="mb-3">
+              {{ form.color.label(class="form-label") }}
+              {{ form.color(class="form-control form-control-color") }}
+            </div>
+            {{ form.submit(class="btn btn-primary w-100") }}
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-bookmark me-2"></i>Теги</h5>
+        </div>
+        <div class="card-body">
+          {% if tags %}
+            <div class="row g-3">
+              {% for tag in tags %}
+                <div class="col-md-6">
+                  <div class="card border-secondary">
+                    <div class="card-body">
+                      <div class="d-flex justify-content-between align-items-center">
+                        <div class="d-flex align-items-center">
+                          <span class="badge me-2" style="background-color: {{ tag.color }}; width: 30px; height: 30px; border-radius: 50%;"></span>
+                          <div>
+                            <h6 class="mb-0">{{ tag.name }}</h6>
+                            <small class="text-muted">{{ tag.transactions|length }} операций</small>
+                          </div>
+                        </div>
+                        <form method="POST" action="{{ url_for('delete_tag', tag_id=tag.id) }}" 
+                              onsubmit="return confirm('Удалить тег?');">
+                          <button type="submit" class="btn btn-sm btn-outline-danger">
+                            <i class="bi bi-trash"></i>
+                          </button>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="text-center py-5">
+              <i class="bi bi-bookmark fs-1 text-muted"></i>
+              <p class="text-muted mt-3">Нет тегов</p>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block title %}Календарь операций - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-calendar3 me-2"></i>Календарь операций</h2>
+    <div class="btn-group">
+      <a href="{{ url_for('calendar', year=prev_year, month=prev_month) }}" class="btn btn-outline-primary">
+        <i class="bi bi-chevron-left"></i> Предыдущий месяц
+      </a>
+      <a href="{{ url_for('calendar', year=date.today().year, month=date.today().month) }}" class="btn btn-outline-secondary">
+        Сегодня
+      </a>
+      <a href="{{ url_for('calendar', year=next_year, month=next_month) }}" class="btn btn-outline-primary">
+        Следующий месяц <i class="bi bi-chevron-right"></i>
+      </a>
+    </div>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-body">
+      <h3 class="text-center mb-4">
+        {{ month_start.strftime("%B %Y") }}
+      </h3>
+      
+      <div class="calendar-grid">
+        <!-- Заголовки дней недели -->
+        <div class="calendar-header">
+          <div class="calendar-day-header">Пн</div>
+          <div class="calendar-day-header">Вт</div>
+          <div class="calendar-day-header">Ср</div>
+          <div class="calendar-day-header">Чт</div>
+          <div class="calendar-day-header">Пт</div>
+          <div class="calendar-day-header">Сб</div>
+          <div class="calendar-day-header">Вс</div>
+        </div>
+        
+        <!-- Дни месяца -->
+        <div class="calendar-body">
+          {% for week in calendar_days|batch(7, fill_with=None) %}
+            <div class="calendar-week">
+              {% for day in week %}
+                {% if day %}
+                  <div class="calendar-day {% if day.date == date.today() %}today{% endif %} {% if day.count > 0 %}has-transactions{% endif %}" 
+                       onclick="showDayTransactions('{{ day.date.isoformat() }}')">
+                    <div class="calendar-day-number">{{ day.date.day }}</div>
+                    {% if day.count > 0 %}
+                      <div class="calendar-day-info">
+                        <div class="calendar-day-income" title="Доходы: {{ "%.2f"|format(day.income) }} {{ currency }}">
+                          <i class="bi bi-arrow-down-circle text-success"></i> {{ "%.0f"|format(day.income) }}
+                        </div>
+                        <div class="calendar-day-expense" title="Расходы: {{ "%.2f"|format(day.expense) }} {{ currency }}">
+                          <i class="bi bi-arrow-up-circle text-danger"></i> {{ "%.0f"|format(day.expense) }}
+                        </div>
+                        <div class="calendar-day-count">
+                          <small>{{ day.count }} операций</small>
+                        </div>
+                      </div>
+                    {% endif %}
+                  </div>
+                {% else %}
+                  <div class="calendar-day empty"></div>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Модальное окно для операций дня -->
+<div class="modal fade" id="dayTransactionsModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-calendar-day me-2"></i>Операции за <span id="modalDate"></span></h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="dayTransactionsContent">
+        <div class="text-center">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Загрузка...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  background: var(--border-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.calendar-header {
+  display: contents;
+}
+
+.calendar-day-header {
+  background: var(--bg-tertiary);
+  padding: 10px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.calendar-body {
+  display: contents;
+}
+
+.calendar-week {
+  display: contents;
+}
+
+.calendar-day {
+  background: var(--bg-secondary);
+  min-height: 100px;
+  padding: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid var(--border-color);
+}
+
+.calendar-day:hover {
+  background: var(--bg-tertiary);
+  transform: scale(1.02);
+  z-index: 1;
+  position: relative;
+}
+
+.calendar-day.today {
+  background: rgba(88, 166, 255, 0.2);
+  border: 2px solid var(--accent-primary);
+}
+
+.calendar-day.has-transactions {
+  border-left: 3px solid var(--accent-primary);
+}
+
+.calendar-day.empty {
+  background: var(--bg-primary);
+  cursor: default;
+}
+
+.calendar-day-number {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.calendar-day-info {
+  font-size: 11px;
+}
+
+.calendar-day-income,
+.calendar-day-expense {
+  margin: 2px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calendar-day-count {
+  margin-top: 4px;
+  color: var(--text-secondary);
+}
+</style>
+
+<script>
+function showDayTransactions(dateStr) {
+  const modal = new bootstrap.Modal(document.getElementById('dayTransactionsModal'));
+  document.getElementById('modalDate').textContent = new Date(dateStr + 'T00:00:00').toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+  
+  // Загружаем операции за день
+  fetch(`/api/transactions/by-date?date=${dateStr}`)
+    .then(response => response.json())
+    .then(data => {
+      const content = document.getElementById('dayTransactionsContent');
+      if (data.transactions && data.transactions.length > 0) {
+        let html = '<div class="table-responsive"><table class="table table-dark table-sm">';
+        html += '<thead><tr><th>Время</th><th>Тип</th><th>Сумма</th><th>Категория</th><th>Примечание</th></tr></thead><tbody>';
+        data.transactions.forEach(t => {
+          html += `<tr>
+            <td>${t.time || '—'}</td>
+            <td><span class="badge ${t.type === 'income' ? 'bg-success' : 'bg-danger'}">
+              ${t.type === 'income' ? 'Доход' : 'Расход'}
+            </span></td>
+            <td><strong class="${t.type === 'income' ? 'text-success' : 'text-danger'}">
+              ${t.type === 'income' ? '+' : '-'}${parseFloat(t.amount).toFixed(2)} ${t.currency}
+            </strong></td>
+            <td>${t.category || '—'}</td>
+            <td>${t.note || '—'}</td>
+          </tr>`;
+        });
+        html += '</tbody></table></div>';
+        content.innerHTML = html;
+      } else {
+        content.innerHTML = '<p class="text-center text-muted">Нет операций за этот день</p>';
+      }
+    })
+    .catch(error => {
+      document.getElementById('dayTransactionsContent').innerHTML = 
+        '<p class="text-danger">Ошибка при загрузке операций</p>';
+    });
+  
+  modal.show();
+}
+</script>
+{% endblock %}
+

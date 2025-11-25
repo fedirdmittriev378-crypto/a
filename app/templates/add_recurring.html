@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block title %}Добавить повторяющуюся операцию - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <div class="card animate-fade-in">
+      <div class="card-header">
+        <h4 class="mb-0"><i class="bi bi-arrow-repeat me-2"></i>Добавить повторяющуюся операцию</h4>
+      </div>
+      <div class="card-body">
+        <form method="POST">
+          {{ form.hidden_tag() }}
+          
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              {{ form.start_date.label(class="form-label") }}
+              {{ form.start_date(class="form-control") }}
+            </div>
+            <div class="col-md-6 mb-3">
+              {{ form.amount.label(class="form-label") }}
+              {{ form.amount(class="form-control") }}
+            </div>
+          </div>
+
+          <div class="mb-3">
+            {{ form.type.label(class="form-label") }}
+            <div class="btn-group w-100" role="group">
+              {% for value, label in form.type.choices %}
+                <input type="radio" class="btn-check" name="{{ form.type.name }}" id="type_{{ value }}" value="{{ value }}" 
+                       {% if form.type.data == value or (not form.type.data and value == 'expense') %}checked{% endif %}>
+                <label class="btn {% if form.type.data == value or (not form.type.data and value == 'expense') %}btn-primary{% else %}btn-outline-primary{% endif %}" 
+                       for="type_{{ value }}">
+                  {% if value == 'income' %}
+                    <i class="bi bi-arrow-down-circle me-1"></i>Доход
+                  {% else %}
+                    <i class="bi bi-arrow-up-circle me-1"></i>Расход
+                  {% endif %}
+                </label>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              {{ form.frequency.label(class="form-label") }}
+              {{ form.frequency(class="form-select") }}
+            </div>
+            <div class="col-md-4 mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                {{ form.category.label(class="form-label mb-0") }}
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
+                  <i class="bi bi-plus-circle me-1"></i>
+                </button>
+              </div>
+              {{ form.category(class="form-select", id="categorySelect") }}
+            </div>
+            <div class="col-md-4 mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                {{ form.account.label(class="form-label mb-0") }}
+                <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#addAccountModal">
+                  <i class="bi bi-plus-circle me-1"></i>
+                </button>
+              </div>
+              {{ form.account(class="form-select", id="accountSelect") }}
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              {{ form.end_date.label(class="form-label") }}
+              {{ form.end_date(class="form-control") }}
+              <small class="text-muted">Опционально: дата окончания повторений</small>
+            </div>
+            <div class="col-md-6 mb-3 d-flex align-items-end">
+              <div class="form-check">
+                {{ form.active(class="form-check-input") }}
+                {{ form.active.label(class="form-check-label") }}
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-3">
+            {{ form.note.label(class="form-label") }}
+            {{ form.note(class="form-control", rows="3") }}
+          </div>
+
+          <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+            <a href="{{ url_for('recurring_list') }}" class="btn btn-secondary">Отмена</a>
+            {{ form.submit(class="btn btn-primary") }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Модальные окна (те же, что в add_transaction.html) -->
+<div class="modal fade" id="addCategoryModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-dark border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-tag me-2"></i>Добавить категорию</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="quickCategoryForm">
+          <div class="mb-3">
+            <label class="form-label">Название категории</label>
+            <input type="text" class="form-control" id="categoryName" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Цвет</label>
+            <input type="color" class="form-control form-control-color" id="categoryColor" value="#6366f1">
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-primary" onclick="addQuickCategory()">
+          <i class="bi bi-check me-1"></i>Добавить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="addAccountModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-dark border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-credit-card me-2"></i>Добавить счёт</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="quickAccountForm">
+          <div class="mb-3">
+            <label class="form-label">Название счёта</label>
+            <input type="text" class="form-control" id="accountName" required>
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Начальный баланс</label>
+              <input type="number" class="form-control" id="accountBalance" value="0" step="0.01">
+            </div>
+            <div class="col-md-6 mb-3">
+              <label class="form-label">Валюта</label>
+              <select class="form-select" id="accountCurrency">
+                <option value="RUB">₽ RUB</option>
+                <option value="USD">$ USD</option>
+                <option value="EUR">€ EUR</option>
+              </select>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+        <button type="button" class="btn btn-primary" onclick="addQuickAccount()">
+          <i class="bi bi-check me-1"></i>Добавить
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Быстрое добавление категории
+  function addQuickCategory() {
+    const name = document.getElementById('categoryName').value.trim();
+    const color = document.getElementById('categoryColor').value;
+    
+    if (!name) {
+      alert('Введите название категории');
+      return;
+    }
+
+    fetch('/api/category/quick-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, color: color})
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        const select = document.getElementById('categorySelect');
+        const option = document.createElement('option');
+        option.value = data.category_id;
+        option.text = name;
+        option.selected = true;
+        select.appendChild(option);
+        bootstrap.Modal.getInstance(document.getElementById('addCategoryModal')).hide();
+        document.getElementById('categoryName').value = '';
+        document.getElementById('categoryColor').value = '#6366f1';
+      } else {
+        alert(data.error || 'Ошибка при добавлении категории');
+      }
+    });
+  }
+
+  // Быстрое добавление счёта
+  function addQuickAccount() {
+    const name = document.getElementById('accountName').value.trim();
+    const balance = parseFloat(document.getElementById('accountBalance').value) || 0;
+    const currency = document.getElementById('accountCurrency').value;
+    
+    if (!name) {
+      alert('Введите название счёта');
+      return;
+    }
+
+    fetch('/api/account/quick-add', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name: name, balance: balance, currency: currency})
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        const select = document.getElementById('accountSelect');
+        const option = document.createElement('option');
+        option.value = data.account_id;
+        option.text = name;
+        option.selected = true;
+        select.appendChild(option);
+        bootstrap.Modal.getInstance(document.getElementById('addAccountModal')).hide();
+        document.getElementById('accountName').value = '';
+        document.getElementById('accountBalance').value = '0';
+        document.getElementById('accountCurrency').value = 'RUB';
+      } else {
+        alert(data.error || 'Ошибка при добавлении счёта');
+      }
+    });
+  }
+</script>
+{% endblock %}

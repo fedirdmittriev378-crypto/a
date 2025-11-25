@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+
+{% block title %}Аккаунт — {{ user.username }}{% endblock %}
+
+{% block content %}
+<div class="container col-10 col-md-8 col-lg-6">
+  <h3 class="mb-3">Аккаунт — {{ user.username }}</h3>
+  <div class="card mb-3">
+    <div class="card-body">
+      <p><strong>Имя:</strong> {{ user.username }}</p>
+      <p><strong>Email:</strong> {{ user.email or '—' }}</p>
+      <p><strong>Дата регистрации:</strong> {{ user.created_at.strftime('%Y-%m-%d') if user.created_at else '—' }}</p>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-4">
+      <div class="card text-center">
+        <div class="card-body">
+          <h4>{{ tx_count }}</h4>
+          <div class="text-muted">Операций</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card text-center">
+        <div class="card-body">
+          <h4>{{ acc_count }}</h4>
+          <div class="text-muted">Счетов</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card text-center">
+        <div class="card-body">
+          <h4>{{ goals_count }}</h4>
+          <div class="text-muted">Целей</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

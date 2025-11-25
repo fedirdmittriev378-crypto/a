@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Категории - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <div class="row">
+    <div class="col-md-4">
+      <div class="card mb-4">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-plus-circle me-2"></i>Добавить категорию</h5>
+        </div>
+        <div class="card-body">
+          <form method="POST">
+    {{ form.hidden_tag() }}
+            
+            <div class="mb-3">
+              {{ form.name.label(class="form-label") }}
+              {{ form.name(class="form-control") }}
+            </div>
+
+            <div class="mb-3">
+              {{ form.color.label(class="form-label") }}
+              {{ form.color(class="form-control form-control-color") }}
+            </div>
+
+            <div class="mb-3">
+              {{ form.icon.label(class="form-label") }}
+              {{ form.icon(class="form-control", placeholder="Например: bi-house") }}
+              <small class="text-muted">Иконка Bootstrap Icons (опционально)</small>
+            </div>
+
+            {{ form.submit(class="btn btn-primary w-100") }}
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-tags me-2"></i>Категории</h5>
+        </div>
+        <div class="card-body">
+          {% if categories %}
+            <div class="row g-3">
+              {% for cat in categories %}
+                <div class="col-md-6">
+                  <div class="card border-secondary">
+                    <div class="card-body">
+                      <div class="d-flex justify-content-between align-items-center">
+                        <div class="d-flex align-items-center">
+                          {% if cat.icon %}
+                            <i class="{{ cat.icon }} me-2 fs-5" style="color: {{ cat.color or '#6366f1' }}"></i>
+                          {% endif %}
+                          <div>
+                            <h6 class="mb-0">{{ cat.name }}</h6>
+                            <small class="text-muted">
+                              {{ cat.transactions|length }} операций
+                            </small>
+                          </div>
+                        </div>
+                        <div class="d-flex align-items-center gap-2">
+                          <span class="badge" style="background-color: {{ cat.color or '#6366f1' }}; width: 30px; height: 30px; border-radius: 50%;"></span>
+                          <form method="POST" action="{{ url_for('delete_category', cat_id=cat.id) }}" 
+                                onsubmit="return confirm('Удалить категорию? Все операции останутся, но без категории.');">
+                            <button type="submit" class="btn btn-sm btn-outline-danger">
+                              <i class="bi bi-trash"></i>
+                            </button>
+  </form>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+    {% else %}
+            <div class="text-center py-5">
+              <i class="bi bi-tags fs-1 text-muted"></i>
+              <p class="text-muted mt-3">Нет категорий</p>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

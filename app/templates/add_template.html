@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Создать шаблон - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <div class="card animate-fade-in">
+      <div class="card-header">
+        <h4 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>Создать шаблон операции</h4>
+      </div>
+      <div class="card-body">
+        <form method="POST">
+          {{ form.hidden_tag() }}
+          
+          <div class="mb-3">
+            {{ form.name.label(class="form-label") }}
+            {{ form.name(class="form-control", placeholder="Например: Зарплата") }}
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              {{ form.amount.label(class="form-label") }}
+              {{ form.amount(class="form-control") }}
+            </div>
+            <div class="col-md-6 mb-3">
+              {{ form.type.label(class="form-label") }}
+              <div class="btn-group w-100" role="group">
+                {% for value, label in form.type.choices %}
+                  <input type="radio" class="btn-check" name="{{ form.type.name }}" id="type_{{ value }}" value="{{ value }}" 
+                         {% if form.type.data == value or (not form.type.data and value == 'expense') %}checked{% endif %}>
+                  <label class="btn {% if form.type.data == value or (not form.type.data and value == 'expense') %}btn-primary{% else %}btn-outline-primary{% endif %}" 
+                         for="type_{{ value }}">
+                    {% if value == 'income' %}Доход{% else %}Расход{% endif %}
+                  </label>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-md-6 mb-3">
+              {{ form.category.label(class="form-label") }}
+              {{ form.category(class="form-select") }}
+            </div>
+            <div class="col-md-6 mb-3">
+              {{ form.account.label(class="form-label") }}
+              {{ form.account(class="form-select") }}
+            </div>
+          </div>
+
+          <div class="mb-3">
+            {{ form.note.label(class="form-label") }}
+            {{ form.note(class="form-control", rows="3") }}
+          </div>
+
+          <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+            <a href="{{ url_for('templates') }}" class="btn btn-secondary">Отмена</a>
+            {{ form.submit(class="btn btn-primary") }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

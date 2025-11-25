@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Планирование расходов - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="animate-fade-in">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-calendar-check me-2"></i>Планирование расходов</h2>
+    <a href="{{ url_for('add_planned_expense') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-2"></i>Добавить планируемый расход
+    </a>
+  </div>
+
+  <div class="row g-4">
+    <div class="col-md-8">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">Предстоящие расходы</h5>
+        </div>
+        <div class="card-body">
+          {% if planned %}
+            <div class="table-responsive">
+              <table class="table table-dark">
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th>Название</th>
+                    <th>Сумма</th>
+                    <th>Категория</th>
+                    <th>Действия</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for p in planned %}
+                    <tr class="{% if p.planned_date.date() < today %}table-danger{% elif p.planned_date.date() == today %}table-warning{% endif %}">
+                      <td>{{ p.planned_date.strftime("%d.%m.%Y") }}</td>
+                      <td>{{ p.name }}</td>
+                      <td><strong>{{ "%.2f"|format(p.amount) }} {{ currency }}</strong></td>
+                      <td>
+                        {% if p.category %}
+                          <span class="badge bg-secondary">{{ p.category.name }}</span>
+                        {% else %}
+                          <span class="text-muted">—</span>
+                        {% endif %}
+                      </td>
+                      <td>
+                        <div class="btn-group btn-group-sm">
+                          <form method="POST" action="{{ url_for('complete_planned_expense', planned_id=p.id) }}" class="d-inline">
+                            <button type="submit" class="btn btn-outline-success">
+                              <i class="bi bi-check"></i>
+                            </button>
+                          </form>
+                          <form method="POST" action="{{ url_for('delete_planned_expense', planned_id=p.id) }}" class="d-inline"
+                                onsubmit="return confirm('Удалить?');">
+                            <button type="submit" class="btn btn-outline-danger">
+                              <i class="bi bi-trash"></i>
+                            </button>
+                          </form>
+                        </div>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="text-muted text-center">Нет планируемых расходов</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">Выполненные</h5>
+        </div>
+        <div class="card-body">
+          {% if completed %}
+            {% for p in completed %}
+              <div class="card mb-2 border-success">
+                <div class="card-body p-2">
+                  <small><strong>{{ p.name }}</strong> - {{ "%.2f"|format(p.amount) }} {{ currency }}</small><br>
+                  <small class="text-muted">{{ p.planned_date.strftime("%d.%m.%Y") }}</small>
+                </div>
+              </div>
+            {% endfor %}
+          {% else %}
+            <p class="text-muted text-center small">Нет выполненных</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Добавить тег - Личный бюджет{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <div class="card animate-fade-in">
+      <div class="card-header">
+        <h4 class="mb-0"><i class="bi bi-bookmark me-2"></i>Добавить тег</h4>
+      </div>
+      <div class="card-body">
+        <form method="POST">
+          {{ form.hidden_tag() }}
+          
+          <div class="mb-3">
+            {{ form.name.label(class="form-label") }}
+            {{ form.name(class="form-control") }}
+          </div>
+
+          <div class="mb-3">
+            {{ form.color.label(class="form-label") }}
+            {{ form.color(class="form-control form-control-color") }}
+          </div>
+
+          <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+            <a href="{{ url_for('tags') }}" class="btn btn-secondary">Отмена</a>
+            {{ form.submit(class="btn btn-primary") }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
