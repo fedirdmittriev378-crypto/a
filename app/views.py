@@ -3,7 +3,7 @@ from .models import (db, User, Category, Transaction, TransactionType, Recurring
                     TransactionTemplate, PlannedExpense, Achievement, Notification)
 from .forms import (CategoryForm, TransactionForm, ImportForm, RecurringForm, GoalForm, 
                    AccountForm, BudgetForm, TagForm, DebtForm, SearchForm,
-                   TransactionTemplateForm, PlannedExpenseForm, TransferForm, LoginForm, RegisterForm)
+                   TransactionTemplateForm, PlannedExpenseForm, TransferForm)
 from datetime import datetime, date, timedelta
 from .utils import save_report_pie, save_category_bar, parse_csv_to_transactions, generate_recurring_occurrences
 from .notifications import generate_all_notifications
@@ -14,19 +14,58 @@ import json
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from urllib.parse import urlparse, urljoin
-from functools import wraps
-
-# --- Constants & Helpers ---
 
 PUBLIC_ENDPOINTS = {
     'index',
     'login',
     'register',
-    'logout',
-    'api_chart_income_expense', 
-    'api_chart_categories',
-    'api_chart_trends',
+    'logout',  # allow logout without recursion
 }
+
+@app.before_request
+def ensure_recurring_generated():
+    # load current user (if any) and ╨│╨╡╨╜╨╡╤Ç╨╕╤Ç╤â╨╡╨╝ ╨┤╨╛ ╤é╨╡╨║╤â╤ë╨╡╨│╨╛ ╨┤╨╜╤Å
+    flask_g.user = None
+    try:
+        if 'user_id' in session:
+            flask_g.user = User.query.get(session.get('user_id'))
+            if flask_g.user:
+                session.permanent = True
+    except Exception:
+        flask_g.user = None
+
+    try:
+        generate_recurring_occurrences()
+        generate_all_notifications()  # ╨ô╨╡╨╜╨╡╤Ç╨╕╤Ç╤â╨╡╨╝ ╤â╨▓╨╡╨┤╨╛╨╝╨╗╨╡╨╜╨╕╤Å
+    except Exception:
+        pass
+
+
+@app.before_request
+def enforce_authentication():
+    endpoint = request.endpoint
+    if not endpoint:
+        return
+    if endpoint.startswith('static'):
+        return
+    if getattr(flask_g, 'user', None):
+        return
+    if endpoint in PUBLIC_ENDPOINTS:
+        return
+    flash('╨ƒ╨╛╨╢╨░╨╗╤â╨╣╤ü╤é╨░, ╨▓╨╛╨╣╨┤╨╕╤é╨╡ ╨▓ ╤ü╨╕╤ü╤é╨╡╨╝╤â', 'warning')
+    return redirect(url_for('login', next=request.path))
+
+
+def login_required(fn):
+    from functools import wraps
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not getattr(flask_g, 'user', None):
+            flash('╨ó╤Ç╨╡╨▒╤â╨╡╤é╤ü╤Å ╨░╨▓╤é╨╛╤Ç╨╕╨╖╨░╤å╨╕╤Å', 'warning')
+            return redirect(url_for('login', next=request.path))
+        return fn(*args, **kwargs)
+    return wrapper
+
 
 def _is_safe_redirect(target: str | None) -> bool:
     """Allow redirects only inside current host."""
@@ -39,210 +78,89 @@ def _is_safe_redirect(target: str | None) -> bool:
         and ref_url.netloc == test_url.netloc
     )
 
-def login_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not getattr(flask_g, 'user', None):
-            flash('Требуется авторизация', 'warning')
-            return redirect(url_for('login', next=request.path))
-        return fn(*args, **kwargs)
-    return wrapper
-
-# --- Before Requests ---
-
-@app.before_request
-def ensure_recurring_generated():
-    # Load current user from session
-    flask_g.user = None
-    try:
-        if 'user_id' in session:
-            flask_g.user = User.query.get(session.get('user_id'))
-            if flask_g.user:
-                session.permanent = True
-    except Exception:
-        flask_g.user = None
-
-    # Run background tasks
-    try:
-        generate_recurring_occurrences()
-        generate_all_notifications()
-    except Exception:
-        pass
-
-
-@app.before_request
-def enforce_authentication():
-    endpoint = request.endpoint
-    if not endpoint or endpoint.startswith('static'):
-        return
-    
-    # Check if user is logged in
-    if getattr(flask_g, 'user', None):
-        return
-        
-    # Allow public endpoints
-    if endpoint in PUBLIC_ENDPOINTS:
-        return
-        
-    # Redirect if not public and not authenticated
-    flash('Пожалуйста, войдите в систему', 'warning')
-    return redirect(url_for('login', next=request.path))
-
-
-# --- Auth Routes ---
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    form = RegisterForm()
-    if form.validate_on_submit():
-        username = form.username.data.strip()
-        username_lc = username.lower()
-        if User.query.filter(func.lower(User.username) == username_lc).first():
-            flash('Пользователь с таким именем уже существует', 'danger')
-            return render_template('register.html', form=form)
-        email = form.email.data.strip().lower() if form.email.data else None
-        if email and User.query.filter(func.lower(User.email) == email).first():
-            flash('Email уже используется', 'danger')
-            return render_template('register.html', form=form)
-        u = User(username=username, email=email)
-        u.set_password(form.password.data)
-        try:
-            db.session.add(u)
-            db.session.commit()
-        except IntegrityError:
-            db.session.rollback()
-            flash('Не удалось создать пользователя, попробуйте позже', 'danger')
-            return render_template('register.html', form=form)
-        session.clear()
-        session.permanent = True
-        session['user_id'] = u.id
-        flash('Регистрация прошла успешно', 'success')
-        return redirect(url_for('index'))
-    return render_template('register.html', form=form)
-
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    form = LoginForm()
-    next_param = request.args.get('next') or request.form.get('next')
-    next_url = next_param if _is_safe_redirect(next_param) else url_for('index')
-    if form.validate_on_submit():
-        username = form.username.data.strip()
-        u = User.query.filter(func.lower(User.username) == username.lower()).first()
-        if not u or not u.check_password(form.password.data):
-            flash('Неверные учетные данные', 'danger')
-            return render_template('login.html', form=form, next=next_param)
-        session.clear()
-        session.permanent = True
-        session['user_id'] = u.id
-        flash('Вы вошли в систему', 'success')
-        return redirect(next_url)
-    return render_template('login.html', form=form, next=next_param)
-
-
-@app.route('/logout')
-def logout():
-    session.pop('user_id', None)
-    flash('Вы вышли из аккаунта', 'success')
-    return redirect(url_for('index'))
-
-
-@app.route('/account')
-@login_required
-def account():
-    user = flask_g.user
-    tx_count = Transaction.query.filter_by(user_id=user.id).count()
-    acc_count = Account.query.filter_by(user_id=user.id).count()
-    goals_count = Goal.query.filter_by(user_id=user.id).count()
-    return render_template('account.html', user=user, tx_count=tx_count, acc_count=acc_count, goals_count=goals_count)
-
-
-# --- Core Application Routes (User Scoped) ---
-
 @app.route("/")
 def index():
-    # If not logged in, show minimal data (Enforced by enforce_authentication redirect unless public)
-    if not getattr(flask_g, 'user', None):
-        return render_template("index.html", income=0, expense=0, balance=0, month_income=0, month_expense=0, accounts=[], recent_transactions=[], goals_data=[], budgets_data=[], avg_expenses_by_category={}, top_expenses=[], unread_count=0)
-
-    user_id = flask_g.user.id
-    today = date.today()
-
-    # --- Calculations ---
+    # ╨₧╨▒╤ë╨░╤Å ╤ü╤é╨░╤é╨╕╤ü╤é╨╕╨║╨░ ΓÇö ╤ä╨╕╨╗╤î╤é╤Ç╤â╨╡╨╝ ╨┐╨╛ ╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤Ä ╨╡╤ü╨╗╨╕ ╨░╨▓╤é╨╛╤Ç╨╕╨╖╨╛╨▓╨░╨╜
+    if getattr(flask_g, 'user', None):
+        total_income = db.session.query(Transaction).filter(Transaction.type == TransactionType.income, Transaction.user_id == flask_g.user.id).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
+        total_expense = db.session.query(Transaction).filter(Transaction.type == TransactionType.expense, Transaction.user_id == flask_g.user.id).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
+    else:
+        total_income = db.session.query(Transaction).filter(Transaction.type == TransactionType.income).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
+        total_expense = db.session.query(Transaction).filter(Transaction.type == TransactionType.expense).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
     
-    # 1. Accounts Logic
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).all()
+    # ╨í╤ç╨╡╤é╨░
+    accounts = Account.query.filter_by(is_active=True, user_id=(flask_g.user.id if getattr(flask_g, 'user', None) else None)).all() if getattr(flask_g, 'user', None) else Account.query.filter_by(is_active=True).all()
     total_accounts_balance = sum(acc.balance for acc in accounts)
-    balance = total_accounts_balance
-
-    # 2. Month Statistics
-    month_start = datetime(today.year, today.month, 1)
     
+    # ╨₧╨▒╤ë╨╕╨╣ ╨▒╨░╨╗╨░╨╜╤ü = ╤ü╤â╨╝╨╝╨░ ╨▓╤ü╨╡╤à ╤ü╤ç╨╡╤é╨╛╨▓
+    balance = total_accounts_balance
+    
+    # ╨í╤é╨░╤é╨╕╤ü╤é╨╕╨║╨░ ╨╖╨░ ╤é╨╡╨║╤â╤ë╨╕╨╣ ╨╝╨╡╤ü╤Å╤å
+    today = date.today()
+    month_start = datetime(today.year, today.month, 1)
+    common_month_filters = [Transaction.date >= month_start]
+    if getattr(flask_g, 'user', None):
+        common_month_filters.append(Transaction.user_id == flask_g.user.id)
+
     month_income = db.session.query(Transaction).filter(
         Transaction.type == TransactionType.income,
-        Transaction.date >= month_start,
-        Transaction.user_id == user_id
+        *common_month_filters
     ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
-
     month_expense = db.session.query(Transaction).filter(
         Transaction.type == TransactionType.expense,
-        Transaction.date >= month_start,
-        Transaction.user_id == user_id
+        *common_month_filters
     ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
-
-    # 3. Recent Transactions
-    recent_transactions = Transaction.query.filter_by(user_id=user_id).order_by(Transaction.date.desc()).limit(5).all()
-
-    # 4. Comparison (Last Month)
+    
+    # ╨ƒ╨╛╤ü╨╗╨╡╨┤╨╜╨╕╨╡ ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╕
+    recent_transactions = Transaction.query.filter_by(user_id=flask_g.user.id).order_by(Transaction.date.desc()).limit(5).all() if getattr(flask_g, 'user', None) else Transaction.query.order_by(Transaction.date.desc()).limit(5).all()
+    
+    # ╨á╨░╤ü╤ê╨╕╤Ç╨╡╨╜╨╜╨░╤Å ╤ü╤é╨░╤é╨╕╤ü╤é╨╕╨║╨░
+    # ╨í╤Ç╨░╨▓╨╜╨╡╨╜╨╕╨╡ ╤ü ╨┐╤Ç╨╛╤ê╨╗╤ï╨╝ ╨╝╨╡╤ü╤Å╤å╨╛╨╝
     if today.month == 1:
         last_month_start = datetime(today.year - 1, 12, 1)
         last_month_end = datetime(today.year, 1, 1)
-        prev_month = 12
-        prev_year = today.year - 1
     else:
         last_month_start = datetime(today.year, today.month - 1, 1)
         last_month_end = datetime(today.year, today.month, 1)
-        prev_month = today.month - 1
-        prev_year = today.year
     
     last_month_income = db.session.query(Transaction).filter(
         Transaction.type == TransactionType.income,
         Transaction.date >= last_month_start,
-        Transaction.date < last_month_end,
-        Transaction.user_id == user_id
+        Transaction.date < last_month_end
     ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
     
     last_month_expense = db.session.query(Transaction).filter(
         Transaction.type == TransactionType.expense,
         Transaction.date >= last_month_start,
-        Transaction.date < last_month_end,
-        Transaction.user_id == user_id
+        Transaction.date < last_month_end
     ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
-
-    # 5. Average Expenses by Category
+    
+    # ╨í╤Ç╨╡╨┤╨╜╨╕╨╡ ╤Ç╨░╤ü╤à╨╛╨┤╤ï ╨┐╨╛ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╤Å╨╝
     avg_expenses_by_category = {}
     categories_with_expenses = db.session.query(
-        Category.name,
-        db.func.avg(Transaction.amount).label('avg_amount')
+        Category.id, Category.name,
+        db.func.avg(Transaction.amount).label('avg_amount'),
+        db.func.count(Transaction.id).label('count')
     ).join(Transaction).filter(
-        Transaction.type == TransactionType.expense,
-        Transaction.user_id == user_id
-    ).group_by(Category.name).all()
+        Transaction.type == TransactionType.expense
+    ).group_by(Category.id, Category.name).all()
     
-    for cat_name, avg_amount in categories_with_expenses:
-        avg_expenses_by_category[cat_name] = float(avg_amount) if avg_amount else 0.0
-
-    # 6. Top 5 Expenses
+    for cat_id, cat_name, avg_amount, count in categories_with_expenses:
+        avg_expenses_by_category[cat_name] = {
+            'avg': float(avg_amount) if avg_amount else 0.0,
+            'count': count
+        }
+    
+    # ╨ó╨╛╨┐-5 ╤ü╨░╨╝╤ï╤à ╨┤╨╛╤Ç╨╛╨│╨╕╤à ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╣
     top_expenses = Transaction.query.filter(
-        Transaction.type == TransactionType.expense,
-        Transaction.user_id == user_id
+        Transaction.type == TransactionType.expense
     ).order_by(Transaction.amount.desc()).limit(5).all()
     
-    # 7. Notifications
-    unread_notifications = Notification.query.filter_by(is_read=False, user_id=user_id).order_by(Notification.created_at.desc()).limit(5).all()
+    # ╨ú╨▓╨╡╨┤╨╛╨╝╨╗╨╡╨╜╨╕╤Å
+    unread_notifications = Notification.query.filter_by(is_read=False, user_id=(flask_g.user.id if getattr(flask_g, 'user', None) else None)).order_by(Notification.created_at.desc()).limit(5).all() if getattr(flask_g, 'user', None) else Notification.query.filter_by(is_read=False).order_by(Notification.created_at.desc()).limit(5).all()
     
-    # 8. Goals
-    active_goals = Goal.query.filter_by(active=True, user_id=user_id).all()
+    # ╨É╨║╤é╨╕╨▓╨╜╤ï╨╡ ╤å╨╡╨╗╨╕
+    active_goals = Goal.query.filter_by(active=True, user_id=(flask_g.user.id if getattr(flask_g, 'user', None) else None)).all() if getattr(flask_g, 'user', None) else Goal.query.filter_by(active=True).all()
     goals_data = []
     for g in active_goals:
         progress = g.current_amount
@@ -254,21 +172,27 @@ def index():
             "remaining": max(0, g.target_amount - progress)
         })
     
-    # 9. Budgets
-    current_budgets = Budget.query.filter(
-        Budget.user_id == user_id,
-        Budget.is_active == True,
-        Budget.period_start <= datetime.now(),
-        Budget.period_end >= datetime.now()
-    ).all()
+    # ╨æ╤Ä╨┤╨╢╨╡╤é╤ï
+    if getattr(flask_g, 'user', None):
+        current_budgets = Budget.query.filter(
+            Budget.user_id == flask_g.user.id,
+            Budget.is_active == True,
+            Budget.period_start <= datetime.now(),
+            Budget.period_end >= datetime.now()
+        ).all()
+    else:
+        current_budgets = Budget.query.filter(
+            Budget.is_active == True,
+            Budget.period_start <= datetime.now(),
+            Budget.period_end >= datetime.now()
+        ).all()
     budgets_data = []
     for b in current_budgets:
         spent = db.session.query(Transaction).filter(
             Transaction.category_id == b.category_id,
             Transaction.type == TransactionType.expense,
             Transaction.date >= b.period_start,
-            Transaction.date <= b.period_end,
-            Transaction.user_id == user_id
+            Transaction.date <= b.period_end
         ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
         percent = min(100.0, (spent / b.amount * 100.0) if b.amount > 0 else 0.0)
         budgets_data.append({
@@ -280,7 +204,7 @@ def index():
     
     currency = app.config.get("DEFAULT_CURRENCY", "RUB")
     return render_template("index.html", 
-                         income=month_income, expense=month_expense, balance=balance,
+                         income=total_income, expense=total_expense, balance=balance,
                          month_income=month_income, month_expense=month_expense,
                          last_month_income=last_month_income, last_month_expense=last_month_expense,
                          accounts=accounts, total_accounts_balance=total_accounts_balance,
@@ -292,24 +216,28 @@ def index():
                          unread_count=len(unread_notifications),
                          currency=currency)
 
-
 @app.route("/transactions")
-@login_required
 def transactions():
-    user_id = flask_g.user.id
     form = SearchForm()
+    if getattr(flask_g, 'user', None):
+        categories = Category.query.filter(db.or_(Category.user_id == None, Category.user_id == flask_g.user.id)).order_by(Category.name).all()
+        accounts = Account.query.filter_by(is_active=True, user_id=flask_g.user.id).order_by(Account.name).all()
+    else:
+        categories = Category.query.order_by(Category.name).all()
+        accounts = Account.query.filter_by(is_active=True).order_by(Account.name).all()
+    form.category.choices = [(0, "╨Æ╤ü╨╡ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕")] + [(c.id, c.name) for c in categories]
+    form.account.choices = [(0, "╨Æ╤ü╨╡ ╤ü╤ç╨╡╤é╨░")] + [(a.id, a.name) for a in accounts]
     
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
-    
-    form.category.choices = [(0, "Все категории")] + [(c.id, c.name) for c in categories]
-    form.account.choices = [(0, "Все счета")] + [(a.id, a.name) for a in accounts]
-    
-    # Quick Filters and Query Logic
+    # ╨æ╤ï╤ü╤é╤Ç╤ï╨╡ ╤ä╨╕╨╗╤î╤é╤Ç╤ï
     quick_filter = request.args.get('quick_filter', '')
     today = date.today()
-    qs = Transaction.query.filter(Transaction.user_id == user_id)
     
+    # ╨ƒ╨╛╨╕╤ü╨║ ╨╕ ╤ä╨╕╨╗╤î╤é╤Ç╨░╤å╨╕╤Å
+    qs = Transaction.query
+    if getattr(flask_g, 'user', None):
+        qs = qs.filter(Transaction.user_id == flask_g.user.id)
+    
+    # ╨ƒ╤Ç╨╕╨╝╨╡╨╜╤Å╨╡╨╝ ╨▒╤ï╤ü╤é╤Ç╤ï╨╣ ╤ä╨╕╨╗╤î╤é╤Ç
     if quick_filter == 'today':
         qs = qs.filter(db.func.date(Transaction.date) == today)
     elif quick_filter == 'week':
@@ -356,6 +284,7 @@ def transactions():
         except:
             pass
     
+    # ╨ñ╨╕╨╗╤î╤é╤Ç ╨┐╨╛ ╨┤╨╕╨░╨┐╨░╨╖╨╛╨╜╤â ╤ü╤â╨╝╨╝
     if request.args.get('amount_from'):
         try:
             amount_from = float(request.args.get('amount_from'))
@@ -369,10 +298,10 @@ def transactions():
             qs = qs.filter(Transaction.amount <= amount_to)
         except:
             pass
-            
+    
     transactions_list = qs.order_by(Transaction.date.desc()).all()
     
-    # Repopulate form from request args
+    # ╨ù╨░╨┐╨╛╨╗╨╜╤Å╨╡╨╝ ╤ä╨╛╤Ç╨╝╤â ╨╖╨╜╨░╤ç╨╡╨╜╨╕╤Å╨╝╨╕ ╨╕╨╖ ╨╖╨░╨┐╤Ç╨╛╤ü╨░
     if request.args:
         form.query.data = request.args.get('query', '')
         form.type.data = request.args.get('type', '')
@@ -404,33 +333,26 @@ def transactions():
     currency = app.config.get("DEFAULT_CURRENCY", "RUB")
     return render_template("transactions.html", transactions=transactions_list, form=form, categories=categories, accounts=accounts, currency=currency, quick_filter=quick_filter)
 
-
 @app.route("/calendar")
 def calendar():
-    user_id = getattr(flask_g, 'user', None).id if getattr(flask_g, 'user', None) else None
-    
     year = int(request.args.get('year', date.today().year))
     month = int(request.args.get('month', date.today().month))
     
-    # Первый день месяца
+    # ╨ƒ╨╡╤Ç╨▓╤ï╨╣ ╨┤╨╡╨╜╤î ╨╝╨╡╤ü╤Å╤å╨░
     month_start = date(year, month, 1)
-    # Последний день месяца
+    # ╨ƒ╨╛╤ü╨╗╨╡╨┤╨╜╨╕╨╣ ╨┤╨╡╨╜╤î ╨╝╨╡╤ü╤Å╤å╨░
     if month == 12:
         month_end = date(year + 1, 1, 1) - timedelta(days=1)
     else:
         month_end = date(year, month + 1, 1) - timedelta(days=1)
     
-    # Получаем все операции за месяц
-    qs = Transaction.query.filter(
+    # ╨ƒ╨╛╨╗╤â╤ç╨░╨╡╨╝ ╨▓╤ü╨╡ ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╕ ╨╖╨░ ╨╝╨╡╤ü╤Å╤å
+    transactions = Transaction.query.filter(
         Transaction.date >= datetime.combine(month_start, datetime.min.time()),
         Transaction.date <= datetime.combine(month_end, datetime.max.time())
-    )
-    if user_id:
-        qs = qs.filter(Transaction.user_id == user_id)
-
-    transactions = qs.all()
+    ).all()
     
-    # Группируем по дням
+    # ╨ô╤Ç╤â╨┐╨┐╨╕╤Ç╤â╨╡╨╝ ╨┐╨╛ ╨┤╨╜╤Å╨╝
     transactions_by_date = {}
     for t in transactions:
         day = t.date.date()
@@ -442,16 +364,16 @@ def calendar():
             transactions_by_date[day]['expense'] += t.amount
         transactions_by_date[day]['count'] += 1
     
-    # Вычисляем первый день недели месяца
-    first_weekday = month_start.weekday()  # 0 = понедельник, 6 = воскресенье
+    # ╨Æ╤ï╤ç╨╕╤ü╨╗╤Å╨╡╨╝ ╨┐╨╡╤Ç╨▓╤ï╨╣ ╨┤╨╡╨╜╤î ╨╜╨╡╨┤╨╡╨╗╨╕ ╨╝╨╡╤ü╤Å╤å╨░
+    first_weekday = month_start.weekday()  # 0 = ╨┐╨╛╨╜╨╡╨┤╨╡╨╗╤î╨╜╨╕╨║, 6 = ╨▓╨╛╤ü╨║╤Ç╨╡╤ü╨╡╨╜╤î╨╡
     
-    # Создаём календарь
+    # ╨í╨╛╨╖╨┤╨░╤æ╨╝ ╨║╨░╨╗╨╡╨╜╨┤╨░╤Ç╤î
     calendar_days = []
-    # Пустые дни в начале месяца
+    # ╨ƒ╤â╤ü╤é╤ï╨╡ ╨┤╨╜╨╕ ╨▓ ╨╜╨░╤ç╨░╨╗╨╡ ╨╝╨╡╤ü╤Å╤å╨░
     for _ in range(first_weekday):
         calendar_days.append(None)
     
-    # Дни месяца
+    # ╨ö╨╜╨╕ ╨╝╨╡╤ü╤Å╤å╨░
     current_date = month_start
     while current_date <= month_end:
         day_data = transactions_by_date.get(current_date, {'income': 0, 'expense': 0, 'count': 0})
@@ -464,7 +386,7 @@ def calendar():
         })
         current_date += timedelta(days=1)
     
-    # Навигация по месяцам
+    # ╨¥╨░╨▓╨╕╨│╨░╤å╨╕╤Å ╨┐╨╛ ╨╝╨╡╤ü╤Å╤å╨░╨╝
     if month == 1:
         prev_month = 12
         prev_year = year - 1
@@ -496,14 +418,12 @@ def calendar():
 @app.route("/transaction/add", methods=["GET","POST"])
 @login_required
 def add_transaction():
-    user_id = flask_g.user.id
     form = TransactionForm()
+    categories = Category.query.filter(db.or_(Category.user_id == None, Category.user_id == flask_g.user.id)).order_by(Category.name).all() if getattr(flask_g, 'user', None) else Category.query.order_by(Category.name).all()
+    accounts = Account.query.filter_by(is_active=True, user_id=flask_g.user.id).order_by(Account.name).all() if getattr(flask_g, 'user', None) else Account.query.filter_by(is_active=True).order_by(Account.name).all()
     
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
-    
-    form.category.choices = [(0, "— без категории —")] + [(c.id, c.name) for c in categories]
-    form.account.choices = [(0, "— без счёта —")] + [(a.id, a.name) for a in accounts]
+    form.category.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕ ΓÇö")] + [(c.id, c.name) for c in categories]
+    form.account.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╤ü╤ç╤æ╤é╨░ ΓÇö")] + [(a.id, a.name) for a in accounts]
     
     if form.validate_on_submit():
         cat = None
@@ -513,7 +433,7 @@ def add_transaction():
         acc = None
         if form.account.data and form.account.data != 0:
             acc = Account.query.get(form.account.data)
-            # Обновляем баланс счёта
+            # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨▒╨░╨╗╨░╨╜╤ü ╤ü╤ç╤æ╤é╨░
             if acc:
                 if form.type.data == "income":
                     acc.balance += form.amount.data
@@ -526,29 +446,30 @@ def add_transaction():
             type = TransactionType.income if form.type.data == "income" else TransactionType.expense,
             category = cat,
             account = acc,
-            note = form.note.data,
-            user_id=user_id
+            note = form.note.data
         )
+        if getattr(flask_g, 'user', None):
+            t.user_id = flask_g.user.id
         db.session.add(t)
         db.session.commit()
-        flash("Операция сохранена", "success")
+        flash("╨₧╨┐╨╡╤Ç╨░╤å╨╕╤Å ╤ü╨╛╤à╤Ç╨░╨╜╨╡╨╜╨░", "success")
         
-        # If 'Save and add more' button was pressed
+        # ╨ò╤ü╨╗╨╕ ╨╜╨░╨╢╨░╤é╨░ ╨║╨╜╨╛╨┐╨║╨░ "╨í╨╛╤à╤Ç╨░╨╜╨╕╤é╤î ╨╕ ╨┤╨╛╨▒╨░╨▓╨╕╤é╤î ╨╡╤ë╤æ", ╨▓╨╛╨╖╨▓╤Ç╨░╤ë╨░╨╡╨╝╤ü╤Å ╨╜╨░ ╤ä╨╛╤Ç╨╝╤â ╤ü ╤ü╨╛╤à╤Ç╨░╨╜╤æ╨╜╨╜╤ï╨╝╨╕ ╨┤╨░╨╜╨╜╤ï╨╝╨╕
         if request.form.get('submit_and_add'):
+            # ╨í╨╛╤à╤Ç╨░╨╜╤Å╨╡╨╝ ╨┤╨░╨╜╨╜╤ï╨╡ ╨▓ ╤ü╨╡╤ü╤ü╨╕╤Ä ╨┤╨╗╤Å ╨┐╤Ç╨╡╨┤╨╖╨░╨┐╨╛╨╗╨╜╨╡╨╜╨╕╤Å ╤ä╨╛╤Ç╨╝╤ï
             session['last_transaction'] = {
                 'date': form.date.data.isoformat() if form.date.data else None,
                 'type': form.type.data,
-                'category': form.category.data if form.category.data != 0 else None,
-                'account': form.account.data if form.account.data != 0 else None,
+                'category': form.category.data if form.category.data and form.category.data != 0 else None,
+                'account': form.account.data if form.account.data and form.account.data != 0 else None,
             }
             return redirect(url_for("add_transaction"))
         
         return redirect(url_for("transactions"))
     if request.method == "GET":
-        # Pre-fill form from session data (if 'Save and add more' was used)
+        # ╨ƒ╤Ç╨╛╨▓╨╡╤Ç╤Å╨╡╨╝, ╨╡╤ü╤é╤î ╨╗╨╕ ╤ü╨╛╤à╤Ç╨░╨╜╤æ╨╜╨╜╤ï╨╡ ╨┤╨░╨╜╨╜╤ï╨╡ ╨╕╨╖ ╨┐╤Ç╨╡╨┤╤ï╨┤╤â╤ë╨╡╨╣ ╤é╤Ç╨░╨╜╨╖╨░╨║╤å╨╕╨╕
         if 'last_transaction' in session:
             last_data = session.pop('last_transaction')
-            # Date
             if last_data.get('date'):
                 try:
                     form.date.data = datetime.strptime(last_data['date'], '%Y-%m-%d').date()
@@ -556,25 +477,30 @@ def add_transaction():
                     form.date.data = datetime.today().date()
             else:
                 form.date.data = datetime.today().date()
-            # Type
+            
             if last_data.get('type'):
                 form.type.data = last_data['type']
-            # Category
+            
             if last_data.get('category'):
                 form.category.data = last_data['category']
-            # Account
+            
             if last_data.get('account'):
                 form.account.data = last_data['account']
         else:
             form.date.data = datetime.today().date()
-            # Automatically select last used account for expenses
+            # ╨É╨▓╤é╨╛╨╝╨░╤é╨╕╤ç╨╡╤ü╨║╨╕ ╨▓╤ï╨▒╨╕╤Ç╨░╨╡╨╝ ╨┐╨╛╤ü╨╗╨╡╨┤╨╜╨╕╨╣ ╨╕╤ü╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╨╜╨╜╤ï╨╣ ╤ü╤ç╤æ╤é ╨┤╨╗╤Å ╤Ç╨░╤ü╤à╨╛╨┤╨╛╨▓
             if form.type.data == "expense" or not form.type.data:
-                last_expense = Transaction.query.filter(
-                    Transaction.user_id == user_id,
+                if getattr(flask_g, 'user', None):
+                    last_expense = Transaction.query.filter(
+                        Transaction.user_id == flask_g.user.id,
+                        Transaction.type == TransactionType.expense,
+                        Transaction.account_id.isnot(None)
+                    ).order_by(Transaction.date.desc(), Transaction.id.desc()).first()
+                else:
+                    last_expense = Transaction.query.filter(
                     Transaction.type == TransactionType.expense,
                     Transaction.account_id.isnot(None)
-                ).order_by(Transaction.date.desc(), Transaction.id.desc()).first()
-
+                    ).order_by(Transaction.date.desc(), Transaction.id.desc()).first()
                 if last_expense and last_expense.account:
                     form.account.data = last_expense.account.id
     currency = app.config.get("DEFAULT_CURRENCY", "RUB")
@@ -583,23 +509,23 @@ def add_transaction():
 @app.route("/transaction/edit/<int:trans_id>", methods=["GET","POST"])
 @login_required
 def edit_transaction(trans_id):
-    user_id = flask_g.user.id
-    t = Transaction.query.filter_by(id=trans_id, user_id=user_id).first_or_404()
+    t = Transaction.query.get_or_404(trans_id)
     form = TransactionForm()
     
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
+    categories = Category.query.filter(db.or_(Category.user_id == None, Category.user_id == flask_g.user.id)).order_by(Category.name).all() if getattr(flask_g, 'user', None) else Category.query.order_by(Category.name).all()
+    accounts = Account.query.filter_by(is_active=True, user_id=flask_g.user.id).order_by(Account.name).all() if getattr(flask_g, 'user', None) else Account.query.filter_by(is_active=True).order_by(Account.name).all()
     
-    form.category.choices = [(0, "— без категории —")] + [(c.id, c.name) for c in categories]
-    form.account.choices = [(0, "— без счёта —")] + [(a.id, a.name) for a in accounts]
+    form.category.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕ ΓÇö")] + [(c.id, c.name) for c in categories]
+    form.account.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╤ü╤ç╤æ╤é╨░ ΓÇö")] + [(a.id, a.name) for a in accounts]
     
     if request.method == "GET":
-        # Pre-fill form
+        # ╨ù╨░╨┐╨╛╨╗╨╜╤Å╨╡╨╝ ╤ä╨╛╤Ç╨╝╤â ╤é╨╡╨║╤â╤ë╨╕╨╝╨╕ ╨╖╨╜╨░╤ç╨╡╨╜╨╕╤Å╨╝╨╕ ╤é╤Ç╨░╨╜╨╖╨░╨║╤å╨╕╨╕
         form.date.data = t.date.date() if t.date else datetime.today().date()
         form.amount.data = t.amount
         form.type.data = t.type.value
         form.note.data = t.note
         
+        # ╨ú╤ü╤é╨░╨╜╨░╨▓╨╗╨╕╨▓╨░╨╡╨╝ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╤Ä ╨╕ ╤ü╤ç╤æ╤é
         if t.category:
             form.category.data = t.category.id
         else:
@@ -611,19 +537,19 @@ def edit_transaction(trans_id):
             form.account.data = 0
     
     if form.validate_on_submit():
-        # Save old values for balance rollback
+        # ╨í╨╛╤à╤Ç╨░╨╜╤Å╨╡╨╝ ╤ü╤é╨░╤Ç╤ï╨╡ ╨╖╨╜╨░╤ç╨╡╨╜╨╕╤Å ╨┤╨╗╤Å ╨╛╤é╨║╨░╤é╨░ ╨▒╨░╨╗╨░╨╜╤ü╨░
         old_account = t.account
         old_amount = t.amount
         old_type = t.type
         
-        # Rollback old balance change
+        # ╨₧╤é╨║╨░╤é╤ï╨▓╨░╨╡╨╝ ╨╕╨╖╨╝╨╡╨╜╨╡╨╜╨╕╤Å ╨▒╨░╨╗╨░╨╜╤ü╨░ ╤ü╤é╨░╤Ç╨╛╨│╨╛ ╤ü╤ç╤æ╤é╨░
         if old_account:
             if old_type == TransactionType.income:
                 old_account.balance -= old_amount
             else:
                 old_account.balance += old_amount
         
-        # Update transaction object
+        # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╤é╤Ç╨░╨╜╨╖╨░╨║╤å╨╕╤Ä
         cat = None
         if form.category.data and form.category.data != 0:
             cat = Category.query.get(form.category.data)
@@ -632,15 +558,17 @@ def edit_transaction(trans_id):
         if form.account.data and form.account.data != 0:
             acc = Account.query.get(form.account.data)
         
+        # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨┐╨╛╨╗╤Å ╤é╤Ç╨░╨╜╨╖╨░╨║╤å╨╕╨╕ (╨┤╨░╤é╨░ ╨╛╨▒╨╜╨╛╨▓╨╗╤Å╨╡╤é╤ü╤Å ╨╕╨╖ ╤ä╨╛╤Ç╨╝╤ï)
         t.date = datetime.combine(form.date.data, datetime.min.time())
         t.amount = form.amount.data
         t.type = TransactionType.income if form.type.data == "income" else TransactionType.expense
         t.category = cat
         t.account = acc
         t.note = form.note.data
-        t.user_id = user_id # Ensure ownership is maintained
+        if getattr(flask_g, 'user', None):
+            t.user_id = flask_g.user.id
         
-        # Apply new balance change
+        # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨▒╨░╨╗╨░╨╜╤ü ╨╜╨╛╨▓╨╛╨│╨╛ ╤ü╤ç╤æ╤é╨░ (╨╕╨╗╨╕ ╤é╨╛╨│╨╛ ╨╢╨╡, ╨╡╤ü╨╗╨╕ ╨╜╨╡ ╨╕╨╖╨╝╨╡╨╜╨╕╨╗╤ü╤Å)
         if acc:
             if t.type == TransactionType.income:
                 acc.balance += t.amount
@@ -648,7 +576,7 @@ def edit_transaction(trans_id):
                 acc.balance -= t.amount
         
         db.session.commit()
-        flash("Операция обновлена", "success")
+        flash("╨₧╨┐╨╡╤Ç╨░╤å╨╕╤Å ╨╛╨▒╨╜╨╛╨▓╨╗╨╡╨╜╨░", "success")
         return redirect(url_for("transactions"))
     
     currency = app.config.get("DEFAULT_CURRENCY", "RUB")
@@ -657,10 +585,9 @@ def edit_transaction(trans_id):
 @app.route("/transaction/delete/<int:trans_id>", methods=["POST"])
 @login_required
 def delete_transaction(trans_id):
-    user_id = flask_g.user.id
-    t = Transaction.query.filter_by(id=trans_id, user_id=user_id).first_or_404()
+    t = Transaction.query.get_or_404(trans_id)
     
-    # Rollback account balance change
+    # ╨₧╤é╨║╨░╤é╤ï╨▓╨░╨╡╨╝ ╨╕╨╖╨╝╨╡╨╜╨╡╨╜╨╕╤Å ╨▒╨░╨╗╨░╨╜╤ü╨░ ╤ü╤ç╤æ╤é╨░
     if t.account:
         if t.type == TransactionType.income:
             t.account.balance -= t.amount
@@ -669,128 +596,123 @@ def delete_transaction(trans_id):
     
     db.session.delete(t)
     db.session.commit()
-    flash("Операция удалена", "success")
+    flash("╨₧╨┐╨╡╤Ç╨░╤å╨╕╤Å ╤â╨┤╨░╨╗╨╡╨╜╨░", "success")
     return redirect(url_for("transactions"))
 
-# Quick Add APIs (User Scoped)
-
+# ╨æ╤ï╤ü╤é╤Ç╨╛╨╡ ╨┤╨╛╨▒╨░╨▓╨╗╨╡╨╜╨╕╨╡ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕ ╤ç╨╡╤Ç╨╡╨╖ AJAX
 @app.route("/api/category/quick-add", methods=["POST"])
-@login_required
 def add_quick_category():
-    user_id = flask_g.user.id
     data = request.get_json()
     name = data.get('name', '').strip()
     color = data.get('color', '#6366f1')
     
     if not name:
-        return jsonify({'success': False, 'error': 'Название категории обязательно'}), 400
+        return jsonify({'success': False, 'error': '╨¥╨░╨╖╨▓╨░╨╜╨╕╨╡ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕ ╨╛╨▒╤Å╨╖╨░╤é╨╡╨╗╤î╨╜╨╛'})
     
-    # Check if category already exists for this user
-    exists = Category.query.filter_by(name=name, user_id=user_id).first()
-    if exists:
-        return jsonify({'success': False, 'error': 'Категория с таким именем уже существует'}), 409
+    # ╨ƒ╤Ç╨╛╨▓╨╡╤Ç╤Å╨╡╨╝, ╨╜╨╡ ╤ü╤â╤ë╨╡╤ü╤é╨▓╤â╨╡╤é ╨╗╨╕ ╤â╨╢╨╡ ╤é╨░╨║╨░╤Å ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╤Å ╤â ╤é╨╡╨║╤â╤ë╨╡╨│╨╛ ╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤Å
+    if getattr(flask_g, 'user', None):
+        existing = Category.query.filter_by(name=name, user_id=flask_g.user.id).first()
+    else:
+        existing = Category.query.filter_by(name=name).first()
+    if existing:
+        return jsonify({'success': False, 'error': '╨Ü╨░╤é╨╡╨│╨╛╤Ç╨╕╤Å ╤ü ╤é╨░╨║╨╕╨╝ ╨╕╨╝╨╡╨╜╨╡╨╝ ╤â╨╢╨╡ ╤ü╤â╤ë╨╡╤ü╤é╨▓╤â╨╡╤é'})
     
     try:
-        cat = Category(name=name, color=color, user_id=user_id)
+        cat = Category(name=name, color=color)
+        if getattr(flask_g, 'user', None):
+            cat.user_id = flask_g.user.id
         db.session.add(cat)
         db.session.commit()
         return jsonify({'success': True, 'category_id': cat.id, 'name': cat.name})
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)})
 
+# ╨æ╤ï╤ü╤é╤Ç╨╛╨╡ ╨┤╨╛╨▒╨░╨▓╨╗╨╡╨╜╨╕╨╡ ╤ü╤ç╤æ╤é╨░ ╤ç╨╡╤Ç╨╡╨╖ AJAX
 @app.route("/api/account/quick-add", methods=["POST"])
-@login_required
 def add_quick_account():
-    user_id = flask_g.user.id
     data = request.get_json()
     name = data.get('name', '').strip()
     balance = float(data.get('balance', 0))
     currency = data.get('currency', 'RUB')
     
     if not name:
-        return jsonify({'success': False, 'error': 'Название счёта обязательно'}), 400
+        return jsonify({'success': False, 'error': '╨¥╨░╨╖╨▓╨░╨╜╨╕╨╡ ╤ü╤ç╤æ╤é╨░ ╨╛╨▒╤Å╨╖╨░╤é╨╡╨╗╤î╨╜╨╛'})
     
     try:
-        acc = Account(name=name, balance=balance, currency=currency, user_id=user_id)
+        acc = Account(name=name, balance=balance, currency=currency)
+        if getattr(flask_g, 'user', None):
+            acc.user_id = flask_g.user.id
         db.session.add(acc)
         db.session.commit()
         return jsonify({'success': True, 'account_id': acc.id, 'name': acc.name})
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)})
 
-# Bulk Operations (User Scoped)
-
+# ╨£╨░╤ü╤ü╨╛╨▓╨╛╨╡ ╤Ç╨╡╨┤╨░╨║╤é╨╕╤Ç╨╛╨▓╨░╨╜╨╕╨╡ ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╣
 @app.route("/api/transactions/bulk-edit", methods=["POST"])
 @login_required
 def bulk_edit_transactions():
-    user_id = flask_g.user.id
     data = request.get_json()
     transaction_ids = data.get('transaction_ids', [])
     category_id = data.get('category_id')
     account_id = data.get('account_id')
     
     if not transaction_ids:
-        return jsonify({'success': False, 'error': 'Не выбраны операции'}), 400
+        return jsonify({'success': False, 'error': '╨¥╨╡ ╨▓╤ï╨▒╤Ç╨░╨╜╤ï ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╕'})
     
     try:
-        # Filter by user_id to prevent editing other users' data
-        transactions = Transaction.query.filter(Transaction.id.in_(transaction_ids), Transaction.user_id == user_id).all()
+        transactions = Transaction.query.filter(Transaction.id.in_(transaction_ids)).all()
         updated = 0
         
         for t in transactions:
             if category_id:
-                cat = Category.query.filter_by(id=category_id, user_id=user_id).first() # Ensure category belongs to user
+                cat = Category.query.get(category_id)
                 if cat:
                     t.category = cat
                     updated += 1
             
             if account_id:
-                old_account = t.account
-                new_acc = Account.query.filter_by(id=account_id, user_id=user_id).first() # Ensure account belongs to user
-
+                # ╨₧╤é╨║╨░╤é╤ï╨▓╨░╨╡╨╝ ╨╕╨╖╨╝╨╡╨╜╨╡╨╜╨╕╤Å ╨▒╨░╨╗╨░╨╜╤ü╨░ ╤ü╤é╨░╤Ç╨╛╨│╨╛ ╤ü╤ç╤æ╤é╨░
+                if t.account:
+                    if t.type == TransactionType.income:
+                        t.account.balance -= t.amount
+                    else:
+                        t.account.balance += t.amount
+                
+                # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨▒╨░╨╗╨░╨╜╤ü ╨╜╨╛╨▓╨╛╨│╨╛ ╤ü╤ç╤æ╤é╨░
+                new_acc = Account.query.get(account_id)
                 if new_acc:
-                    # Rollback old balance change
-                    if old_account:
-                        if old_account.id != new_acc.id:
-                            if t.type == TransactionType.income:
-                                old_account.balance -= t.amount
-                            else:
-                                old_account.balance += t.amount
-                    
-                    # Apply new balance change
-                    if old_account.id != new_acc.id:
-                        if t.type == TransactionType.income:
-                            new_acc.balance += t.amount
-                        else:
-                            new_acc.balance -= t.amount
-                    
                     t.account = new_acc
+                    if t.type == TransactionType.income:
+                        new_acc.balance += t.amount
+                    else:
+                        new_acc.balance -= t.amount
                     updated += 1
         
         db.session.commit()
         return jsonify({'success': True, 'updated': updated})
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)})
 
+# ╨£╨░╤ü╤ü╨╛╨▓╨╛╨╡ ╤â╨┤╨░╨╗╨╡╨╜╨╕╨╡ ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╣
 @app.route("/api/transactions/bulk-delete", methods=["POST"])
 @login_required
 def bulk_delete_transactions():
-    user_id = flask_g.user.id
     data = request.get_json()
     transaction_ids = data.get('transaction_ids', [])
     
     if not transaction_ids:
-        return jsonify({'success': False, 'error': 'Не выбраны операции'}), 400
+        return jsonify({'success': False, 'error': '╨¥╨╡ ╨▓╤ï╨▒╤Ç╨░╨╜╤ï ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╕'})
     
     try:
-        transactions = Transaction.query.filter(Transaction.id.in_(transaction_ids), Transaction.user_id == user_id).all()
+        transactions = Transaction.query.filter(Transaction.id.in_(transaction_ids)).all()
         deleted = 0
         
         for t in transactions:
-            # Rollback account balance change
+            # ╨₧╤é╨║╨░╤é╤ï╨▓╨░╨╡╨╝ ╨╕╨╖╨╝╨╡╨╜╨╡╨╜╨╕╤Å ╨▒╨░╨╗╨░╨╜╤ü╨░ ╤ü╤ç╤æ╤é╨░
             if t.account:
                 if t.type == TransactionType.income:
                     t.account.balance -= t.amount
@@ -803,24 +725,19 @@ def bulk_delete_transactions():
         return jsonify({'success': True, 'deleted': deleted})
     except Exception as e:
         db.session.rollback()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': str(e)})
 
-
-# API for calendar data (User Scoped)
-
+# API ╨┤╨╗╤Å ╨┐╨╛╨╗╤â╤ç╨╡╨╜╨╕╤Å ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╣ ╨╖╨░ ╨┤╨╡╨╜╤î (╨┤╨╗╤Å ╨║╨░╨╗╨╡╨╜╨┤╨░╤Ç╤Å)
 @app.route("/api/transactions/by-date")
-@login_required
 def transactions_by_date():
-    user_id = flask_g.user.id
     date_str = request.args.get('date')
     if not date_str:
-        return jsonify({'error': 'Не указана дата'}), 400
+        return jsonify({'error': '╨¥╨╡ ╤â╨║╨░╨╖╨░╨╜╨░ ╨┤╨░╤é╨░'}), 400
     
     try:
         target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         transactions = Transaction.query.filter(
-            db.func.date(Transaction.date) == target_date,
-            Transaction.user_id == user_id
+            db.func.date(Transaction.date) == target_date
         ).order_by(Transaction.date).all()
         
         result = []
@@ -837,101 +754,93 @@ def transactions_by_date():
         
         return jsonify({'transactions': result})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# Categories (User Scoped)
+        return jsonify({'error': str(e)}), 400
 
 @app.route("/categories", methods=["GET","POST"])
-@login_required
 def categories():
-    user_id = flask_g.user.id
     form = CategoryForm()
-    
     if form.validate_on_submit():
         name = form.name.data.strip()
-        # Check if category already exists for this user
-        exists = Category.query.filter_by(name=name, user_id=user_id).first()
+        # ╨┐╤Ç╨╛╨▓╨╡╤Ç╤Å╨╡╨╝ ╤ü ╤â╤ç╨╡╤é╨╛╨╝ ╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤Å (╨╡╤ü╨╗╨╕ ╨░╨▓╤é╨╛╤Ç╨╕╨╖╨╛╨▓╨░╨╜) ΓÇö ╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤î ╨╝╨╛╨╢╨╡╤é ╨╕╨╝╨╡╤é╤î ╤ü╨▓╨╛╨╕ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕
+        if getattr(flask_g, 'user', None):
+            exists = Category.query.filter_by(name=name, user_id=flask_g.user.id).first()
+        else:
+            exists = Category.query.filter_by(name=name).first()
         if exists:
-            flash("Категория с таким именем уже есть", "warning")
+            flash("╨Ü╨░╤é╨╡╨│╨╛╤Ç╨╕╤Å ╤ü ╤é╨░╨║╨╕╨╝ ╨╕╨╝╨╡╨╜╨╡╨╝ ╤â╨╢╨╡ ╨╡╤ü╤é╤î", "warning")
         else:
             c = Category(
                 name=name,
                 color=form.color.data or "#6366f1",
-                icon=form.icon.data or None,
-                user_id=user_id
+                icon=form.icon.data or None
             )
+            if getattr(flask_g, 'user', None):
+                c.user_id = flask_g.user.id
             db.session.add(c)
             db.session.commit()
-            flash("Категория добавлена", "success")
+            flash("╨Ü╨░╤é╨╡╨│╨╛╤Ç╨╕╤Å ╨┤╨╛╨▒╨░╨▓╨╗╨╡╨╜╨░", "success")
             return redirect(url_for("categories"))
-    
-    # Filter categories by user_id or None (for built-in categories)
-    cats = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
+    cats = Category.query.filter(db.or_(Category.user_id == None, Category.user_id == flask_g.user.id)).order_by(Category.name).all() if getattr(flask_g, 'user', None) else Category.query.order_by(Category.name).all()
     return render_template("categories.html", form=form, categories=cats)
 
 @app.route("/categories/delete/<int:cat_id>", methods=["POST"])
-@login_required
 def delete_category(cat_id):
-    user_id = flask_g.user.id
-    # Ensure user owns the category or it's not system category
-    cat = Category.query.filter(Category.id == cat_id, Category.user_id == user_id).first_or_404()
-    
+    cat = Category.query.get_or_404(cat_id)
     db.session.delete(cat)
     db.session.commit()
-    flash("Категория удалена", "success")
+    flash("╨Ü╨░╤é╨╡╨│╨╛╤Ç╨╕╤Å ╤â╨┤╨░╨╗╨╡╨╜╨░", "success")
     return redirect(url_for("categories"))
-
-# Import/Export (User Scoped)
 
 @app.route("/import", methods=["GET","POST"])
 @login_required
 def import_csv():
-    user_id = flask_g.user.id
     form = ImportForm()
     if form.validate_on_submit():
         f = request.files.get(form.csv_file.name)
         if not f:
-            flash("Файл не получен", "danger")
+            flash("╨ñ╨░╨╣╨╗ ╨╜╨╡ ╨┐╨╛╨╗╤â╤ç╨╡╨╜", "danger")
             return redirect(url_for("import_csv"))
         try:
             df = parse_csv_to_transactions(f)
         except Exception as e:
-            flash(f"Ошибка при чтении CSV: {e}", "danger")
+            flash(f"╨₧╤ê╨╕╨▒╨║╨░ ╨┐╤Ç╨╕ ╤ç╤é╨╡╨╜╨╕╨╕ CSV: {e}", "danger")
             return redirect(url_for("import_csv"))
-        
         for _, row in df.iterrows():
             cat = None
             if 'category' in df.columns and pd.notna(row.get('category')):
                 cat_name = str(row.get('category')).strip()
                 if cat_name:
-                    # Find or create category, associated with the current user
-                    cat = Category.query.filter(Category.name == cat_name, Category.user_id == user_id).first()
+                    if getattr(flask_g, 'user', None):
+                        cat = Category.query.filter_by(name=cat_name, user_id=flask_g.user.id).first()
+                    else:
+                        cat = Category.query.filter_by(name=cat_name).first()
                     if not cat:
-                        cat = Category(name=cat_name, user_id=user_id)
+                        cat = Category(name=cat_name)
+                        if getattr(flask_g, 'user', None):
+                            cat.user_id = flask_g.user.id
                         db.session.add(cat)
                         db.session.flush()
-            
             t = Transaction(
                 date = row['date'].to_pydatetime(),
                 amount = float(row['amount']),
                 type = TransactionType.income if str(row['type']).lower().startswith('i') else TransactionType.expense,
                 category = cat,
-                note = str(row.get('note')) if 'note' in df.columns else None,
-                user_id = user_id
+                note = str(row.get('note')) if 'note' in df.columns else None
             )
+            if getattr(flask_g, 'user', None):
+                t.user_id = flask_g.user.id
             db.session.add(t)
-            
         db.session.commit()
-        flash(f"Импортировано {len(df)} записей", "success")
+        flash(f"╨ÿ╨╝╨┐╨╛╤Ç╤é╨╕╤Ç╨╛╨▓╨░╨╜╨╛ {len(df)} ╨╖╨░╨┐╨╕╤ü╨╡╨╣", "success")
         return redirect(url_for("transactions"))
     return render_template("import.html", form=form)
 
 @app.route("/export")
-@login_required
 def export_csv():
-    user_id = flask_g.user.id
-    qs = Transaction.query.filter(Transaction.user_id == user_id).order_by(Transaction.date.desc()).all()
-    
+    qs = Transaction.query.order_by(Transaction.date.desc())
+    if getattr(flask_g, 'user', None):
+        qs = qs.filter(Transaction.user_id == flask_g.user.id)
+    qs = qs.all()
     rows = []
     for t in qs:
         rows.append({
@@ -943,41 +852,32 @@ def export_csv():
             "note": t.note or ""
         })
     df = pd.DataFrame(rows)
-    # Use a unique temporary path for the file
-    filename = f"export_{user_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"
-    csv_path = os.path.join(app.config['REPORTS_FOLDER'], filename)
-    
-    if not os.path.exists(app.config['REPORTS_FOLDER']):
-        os.makedirs(app.config['REPORTS_FOLDER'])
-        
+    csv_path = os.path.join(app.config['REPORTS_FOLDER'], "export.csv")
     df.to_csv(csv_path, index=False)
-    
-    response = send_from_directory(directory=app.config['REPORTS_FOLDER'], path=filename, as_attachment=True)
-    
-    # Delete file after sending (clean up)
-    @response.call_on_close
-    def cleanup():
-        os.remove(csv_path)
-        
-    return response
+    return send_from_directory(directory=app.config['REPORTS_FOLDER'], path="export.csv", as_attachment=True)
 
-# API Charts (User Scoped)
-
+# API ╨┤╨╗╤Å ╨│╤Ç╨░╤ä╨╕╨║╨╛╨▓
 @app.route("/api/chart/income-expense")
-@login_required
 def api_chart_income_expense():
-    user_id = flask_g.user.id
-    # Logic to filter by month/year and user_id is complex, leaving simplified for brevity
-    # but ensuring user_id filter is applied.
-    
+    try:
+        month = int(request.args.get("month", 0))
+        year = int(request.args.get("year", 0))
+    except:
+        month = 0; year = 0
     today = date.today()
-    month = int(request.args.get("month", today.month))
-    year = int(request.args.get("year", today.year))
+    if not month or not year:
+        month = today.month
+        year = today.year
     
     start = datetime(year, month, 1)
-    end = datetime(year + (1 if month == 12 else 0), (1 if month == 12 else month + 1), 1)
+    if month == 12:
+        end = datetime(year+1, 1, 1)
+    else:
+        end = datetime(year, month+1, 1)
     
-    common_filters = [Transaction.date >= start, Transaction.date < end, Transaction.user_id == user_id]
+    common_filters = [Transaction.date >= start, Transaction.date < end]
+    if getattr(flask_g, 'user', None):
+        common_filters.append(Transaction.user_id == flask_g.user.id)
 
     income = db.session.query(Transaction).filter(
         Transaction.type == TransactionType.income,
@@ -995,39 +895,55 @@ def api_chart_income_expense():
     })
 
 @app.route("/api/chart/categories")
-@login_required
 def api_chart_categories():
-    user_id = flask_g.user.id
-    # Logic to filter by month/year and user_id is complex, leaving simplified for brevity.
-    
+    try:
+        month = int(request.args.get("month", 0))
+        year = int(request.args.get("year", 0))
+    except:
+        month = 0; year = 0
     today = date.today()
-    month = int(request.args.get("month", today.month))
-    year = int(request.args.get("year", today.year))
+    if not month or not year:
+        month = today.month
+        year = today.year
     
     start = datetime(year, month, 1)
-    end = datetime(year + (1 if month == 12 else 0), (1 if month == 12 else month + 1), 1)
+    if month == 12:
+        end = datetime(year+1, 1, 1)
+    else:
+        end = datetime(year, month+1, 1)
     
     filters = [
         Transaction.type == TransactionType.expense,
         Transaction.date >= start,
-        Transaction.date < end,
-        Transaction.user_id == user_id
+        Transaction.date < end
     ]
+    if getattr(flask_g, 'user', None):
+        filters.append(Transaction.user_id == flask_g.user.id)
     qs = Transaction.query.filter(*filters).all()
     
     categories_data = {}
-    categories_info = {}
-    
+    categories_info = {}  # ╨ö╨╗╤Å ╤à╤Ç╨░╨╜╨╡╨╜╨╕╤Å ╤å╨▓╨╡╤é╨░ ╨╕ ╨╕╨║╨╛╨╜╨║╨╕ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕
     for t in qs:
-        cat_name = t.category.name if t.category else "Без категории"
-        if cat_name not in categories_data:
-            categories_data[cat_name] = 0
-            categories_info[cat_name] = {
-                'color': t.category.color if t.category and t.category.color else '#8b5cf6',
-                'icon': t.category.icon if t.category and t.category.icon else 'bi-question-circle'
-            }
-        categories_data[cat_name] += t.amount
+        if t.category:
+            cat_name = t.category.name
+            if cat_name not in categories_data:
+                categories_data[cat_name] = 0
+                categories_info[cat_name] = {
+                    'color': t.category.color or '#6366f1',
+                    'icon': t.category.icon or 'bi-circle'
+                }
+            categories_data[cat_name] += t.amount
+        else:
+            cat_name = "╨æ╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕"
+            if cat_name not in categories_data:
+                categories_data[cat_name] = 0
+                categories_info[cat_name] = {
+                    'color': '#8b5cf6',
+                    'icon': 'bi-question-circle'
+                }
+            categories_data[cat_name] += t.amount
     
+    # ╨Æ╨╛╨╖╨▓╤Ç╨░╤ë╨░╨╡╨╝ ╨┤╨░╨╜╨╜╤ï╨╡ ╤ü ╨╕╨╜╤ä╨╛╤Ç╨╝╨░╤å╨╕╨╡╨╣ ╨╛ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╤Å╤à
     result = {
         'data': categories_data,
         'info': categories_info
@@ -1035,21 +951,21 @@ def api_chart_categories():
     return jsonify(result)
 
 @app.route("/api/chart/trends")
-@login_required
 def api_chart_trends():
-    user_id = flask_g.user.id
-    
+    # ╨ö╨░╨╜╨╜╤ï╨╡ ╨╖╨░ ╨┐╨╛╤ü╨╗╨╡╨┤╨╜╨╕╨╡ 6 ╨╝╨╡╤ü╤Å╤å╨╡╨▓
     today = date.today()
     months_data = []
-    
     for i in range(5, -1, -1):
         month_date = today - relativedelta(months=i)
-        month = month_date.month
-        year = month_date.year
-        month_start = datetime(year, month, 1)
-        month_end = datetime(year + (1 if month == 12 else 0), (1 if month == 12 else month + 1), 1)
+        month_start = datetime(month_date.year, month_date.month, 1)
+        if month_date.month == 12:
+            month_end = datetime(month_date.year+1, 1, 1)
+        else:
+            month_end = datetime(month_date.year, month_date.month+1, 1)
         
-        common_filters = [Transaction.date >= month_start, Transaction.date < month_end, Transaction.user_id == user_id]
+        common_filters = [Transaction.date >= month_start, Transaction.date < month_end]
+        if getattr(flask_g, 'user', None):
+            common_filters.append(Transaction.user_id == flask_g.user.id)
 
         income = db.session.query(Transaction).filter(
             Transaction.type == TransactionType.income,
@@ -1071,40 +987,145 @@ def api_chart_trends():
     return jsonify(months_data)
 
 @app.route("/report", methods=["GET","POST"])
-@login_required
 def report():
-    # --- Code is too long for the limited context. Assume core logic filters by user_id ---
-    user_id = flask_g.user.id
-    flash("Report logic needs to be fully scoped to user_id. Placeholder used.", "info")
-    
-    return redirect(url_for('index')) # Redirecting to prevent errors
+    # ╨╝╨╡╤ü╤Å╤å/╨│╨╛╨┤ ╨╕╨╖ query params ╨╕╨╗╨╕ ╤ä╨╛╤Ç╨╝╨░
+    try:
+        month = int(request.args.get("month", 0))
+        year = int(request.args.get("year", 0))
+    except:
+        month = 0; year = 0
+    today = date.today()
+    if not month or not year:
+        month = today.month
+        year = today.year
 
-@app.route("/calendar")
-@login_required
-def calendar():
-    # --- Code is too long for the limited context. Assume core logic filters by user_id ---
-    user_id = flask_g.user.id
-    flash("Calendar logic needs to be fully scoped to user_id. Placeholder used.", "info")
-    
-    return redirect(url_for('index')) # Redirecting to prevent errors
+    # date range for chosen month
+    start = datetime(year, month, 1)
+    if month == 12:
+        end = datetime(year+1, 1, 1)
+    else:
+        end = datetime(year, month+1, 1)
 
+    # ╨ƒ╤Ç╨╛╤ê╨╗╤ï╨╣ ╨╝╨╡╤ü╤Å╤å ╨┤╨╗╤Å ╤ü╤Ç╨░╨▓╨╜╨╡╨╜╨╕╤Å
+    if month == 1:
+        prev_month_start = datetime(year - 1, 12, 1)
+        prev_month_end = datetime(year, 1, 1)
+        prev_month = 12
+        prev_year = year - 1
+    else:
+        prev_month_start = datetime(year, month - 1, 1)
+        prev_month_end = datetime(year, month, 1)
+        prev_month = month - 1
+        prev_year = year
+
+    # ╨í╨╗╨╡╨┤╤â╤Ä╤ë╨╕╨╣ ╨╝╨╡╤ü╤Å╤å
+    if month == 12:
+        next_month = 1
+        next_year = year + 1
+    else:
+        next_month = month + 1
+        next_year = year
+
+    qs = Transaction.query.filter(Transaction.date >= start, Transaction.date < end)
+    if getattr(flask_g, 'user', None):
+        qs = qs.filter(Transaction.user_id == flask_g.user.id)
+    qs = qs.all()
+    if not qs:
+        flash("╨¥╨╡╤é ╨╛╨┐╨╡╤Ç╨░╤å╨╕╨╣ ╨╖╨░ ╨▓╤ï╨▒╤Ç╨░╨╜╨╜╤ï╨╣ ╨╝╨╡╤ü╤Å╤å", "warning")
+    data = []
+    for t in qs:
+        data.append({
+            "date": t.date,
+            "amount": t.amount,
+            "type": t.type.value,
+            "category": t.category.name if t.category else "╨æ╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕"
+        })
+    df = pd.DataFrame(data) if data else pd.DataFrame(columns=['date','amount','type','category'])
+
+    # ╨ö╨░╨╜╨╜╤ï╨╡ ╨╖╨░ ╨┐╤Ç╨╛╤ê╨╗╤ï╨╣ ╨╝╨╡╤ü╤Å╤å
+    prev_qs = Transaction.query.filter(Transaction.date >= prev_month_start, Transaction.date < prev_month_end)
+    if getattr(flask_g, 'user', None):
+        prev_qs = prev_qs.filter(Transaction.user_id == flask_g.user.id)
+    prev_qs = prev_qs.all()
+    prev_data = []
+    for t in prev_qs:
+        prev_data.append({
+            "date": t.date,
+            "amount": t.amount,
+            "type": t.type.value,
+            "category": t.category.name if t.category else "╨æ╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕"
+        })
+    prev_df = pd.DataFrame(prev_data) if prev_data else pd.DataFrame(columns=['date','amount','type','category'])
+
+    # aggregate by type
+    agg_type = df.groupby('type')['amount'].sum().reset_index() if not df.empty else pd.DataFrame({'type':['income','expense'],'amount':[0,0]})
+    prev_agg_type = prev_df.groupby('type')['amount'].sum().reset_index() if not prev_df.empty else pd.DataFrame({'type':['income','expense'],'amount':[0,0]})
+    pie_path = save_report_pie(agg_type, filename=f"pie_{year}_{month}.png")
+
+    # aggregate by category
+    if not df.empty:
+        by_cat = df.groupby('category')['amount'].sum().sort_values(ascending=False).to_frame()
+    else:
+        by_cat = pd.DataFrame(columns=['amount'])
+    bar_path = save_category_bar(by_cat, filename=f"bar_{year}_{month}.png")
+
+    # ╨á╨░╤ü╤ç╤æ╤é ╨┤╨╛╤à╨╛╨┤╨╛╨▓ ╨╕ ╤Ç╨░╤ü╤à╨╛╨┤╨╛╨▓ ╨┤╨╗╤Å ╤é╨╡╨║╤â╤ë╨╡╨│╨╛ ╨╕ ╨┐╤Ç╨╛╤ê╨╗╨╛╨│╨╛ ╨╝╨╡╤ü╤Å╤å╨░
+    current_income = float(agg_type[agg_type['type'] == 'income']['amount'].sum()) if not agg_type.empty and 'income' in agg_type['type'].values else 0.0
+    current_expense = float(agg_type[agg_type['type'] == 'expense']['amount'].sum()) if not agg_type.empty and 'expense' in agg_type['type'].values else 0.0
+    prev_income = float(prev_agg_type[prev_agg_type['type'] == 'income']['amount'].sum()) if not prev_agg_type.empty and 'income' in prev_agg_type['type'].values else 0.0
+    prev_expense = float(prev_agg_type[prev_agg_type['type'] == 'expense']['amount'].sum()) if not prev_agg_type.empty and 'expense' in prev_agg_type['type'].values else 0.0
+
+    # goals and progress (total contributions up to end of chosen month)
+    goals = Goal.query.filter_by(user_id=(flask_g.user.id if getattr(flask_g, 'user', None) else None)).order_by(Goal.id.desc()).all() if getattr(flask_g, 'user', None) else Goal.query.order_by(Goal.id.desc()).all()
+    goals_progress = []
+    for g in goals:
+        if g.category:
+            s = db.session.query(Transaction).filter(
+                Transaction.category_id == g.category.id,
+                Transaction.type == TransactionType.income,
+                Transaction.date <= end - pd.Timedelta(days=1)
+            ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
+            progress = float(s)
+        else:
+            progress = 0.0
+        goals_progress.append({
+            "goal": g,
+            "progress": progress,
+            "percent": min(100.0, (progress / g.target_amount * 100.0) if g.target_amount > 0 else 0.0)
+        })
+
+    # provide month/year selectors
+    years = list(range(today.year-5, today.year+2))
+    months = list(range(1,13))
+    currency = app.config.get("DEFAULT_CURRENCY", "RUB")
+    month_names = {
+        1: "╨»╨╜╨▓╨░╤Ç╤î", 2: "╨ñ╨╡╨▓╤Ç╨░╨╗╤î", 3: "╨£╨░╤Ç╤é", 4: "╨É╨┐╤Ç╨╡╨╗╤î",
+        5: "╨£╨░╨╣", 6: "╨ÿ╤Ä╨╜╤î", 7: "╨ÿ╤Ä╨╗╤î", 8: "╨É╨▓╨│╤â╤ü╤é",
+        9: "╨í╨╡╨╜╤é╤Å╨▒╤Ç╤î", 10: "╨₧╨║╤é╤Å╨▒╤Ç╤î", 11: "╨¥╨╛╤Å╨▒╤Ç╤î", 12: "╨ö╨╡╨║╨░╨▒╤Ç╤î"
+    }
+    return render_template("report.html", pie_url=os.path.basename(pie_path), bar_url=os.path.basename(bar_path),
+                           by_cat=by_cat, month=month, year=year, months=months, years=years,
+                           goals_progress=goals_progress, currency=currency,
+                           month_names=month_names, prev_month=prev_month, prev_year=prev_year,
+                           next_month=next_month, next_year=next_year,
+                           current_income=current_income, current_expense=current_expense,
+                           prev_income=prev_income, prev_expense=prev_expense)
+
+# Recurring
 @app.route("/recurring")
-@login_required
 def recurring_list():
-    user_id = flask_g.user.id
-    recs = Recurring.query.filter_by(user_id=user_id).order_by(Recurring.id.desc()).all()
+    recs = Recurring.query.filter_by(user_id=flask_g.user.id).order_by(Recurring.id.desc()).all() if getattr(flask_g, 'user', None) else Recurring.query.order_by(Recurring.id.desc()).all()
     return render_template("recurring_list.html", recurrings=recs)
 
 @app.route("/recurring/add", methods=["GET","POST"])
 @login_required
 def add_recurring():
-    user_id = flask_g.user.id
     form = RecurringForm()
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
+    categories = Category.query.order_by(Category.name).all()
+    accounts = Account.query.filter_by(is_active=True, user_id=flask_g.user.id).order_by(Account.name).all() if getattr(flask_g, 'user', None) else Account.query.filter_by(is_active=True).order_by(Account.name).all()
     
-    form.category.choices = [(0, "— без категории —")] + [(c.id, c.name) for c in categories]
-    form.account.choices = [(0, "— без счёта —")] + [(a.id, a.name) for a in accounts]
+    form.category.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕ ΓÇö")] + [(c.id, c.name) for c in categories]
+    form.account.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╤ü╤ç╤æ╤é╨░ ΓÇö")] + [(a.id, a.name) for a in accounts]
     
     if form.validate_on_submit():
         cat = None
@@ -1125,16 +1146,17 @@ def add_recurring():
             note = form.note.data,
             end_date = datetime.combine(form.end_date.data, datetime.min.time()) if form.end_date.data else None,
             next_date = datetime.combine(form.start_date.data, datetime.min.time()),
-            active = form.active.data,
-            user_id = user_id
+            active = form.active.data
         )
+        if getattr(flask_g, 'user', None):
+            r.user_id = flask_g.user.id
         db.session.add(r)
         db.session.commit()
         try:
             generate_recurring_occurrences()
         except Exception:
             pass
-        flash("Повторяющаяся операция сохранена", "success")
+        flash("╨ƒ╨╛╨▓╤é╨╛╤Ç╤Å╤Ä╤ë╨░╤Å╤ü╤Å ╨╛╨┐╨╡╤Ç╨░╤å╨╕╤Å ╤ü╨╛╤à╤Ç╨░╨╜╨╡╨╜╨░", "success")
         return redirect(url_for("recurring_list"))
     if request.method == "GET":
         form.start_date.data = datetime.today().date()
@@ -1143,30 +1165,51 @@ def add_recurring():
 @app.route("/recurring/delete/<int:rec_id>", methods=["POST"])
 @login_required
 def recurring_delete(rec_id):
-    user_id = flask_g.user.id
-    r = Recurring.query.filter_by(id=rec_id, user_id=user_id).first_or_404()
+    r = Recurring.query.get_or_404(rec_id)
     db.session.delete(r)
     db.session.commit()
-    flash("Удалено", "success")
+    flash("╨ú╨┤╨░╨╗╨╡╨╜╨╛", "success")
     return redirect(url_for("recurring_list"))
 
+# Goals
 @app.route("/goals")
-@login_required
 def goals():
-    user_id = flask_g.user.id
-    gs = Goal.query.filter_by(user_id=user_id).order_by(Goal.id.desc()).all()
+    gs = Goal.query.order_by(Goal.id.desc()).all()
     goals_progress = []
-    # ... (Goals logic implementation needed) ...
-    flash("Goals logic needs to be fully implemented with user_id.", "info")
-    return render_template("goals.html", goals_progress=goals_progress, currency=app.config.get("DEFAULT_CURRENCY", "RUB"))
+    for g in gs:
+        # ╨ÿ╤ü╨┐╨╛╨╗╤î╨╖╤â╨╡╨╝ current_amount ╨╕╨╖ ╨╝╨╛╨┤╨╡╨╗╨╕, ╨╜╨╛ ╤é╨░╨║╨╢╨╡ ╤â╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╤Ä ╨╡╤ü╨╗╨╕ ╨╡╤ü╤é╤î
+        progress = g.current_amount
+        if g.category:
+            s = db.session.query(Transaction).filter(
+                Transaction.category_id == g.category.id,
+                Transaction.type == TransactionType.income
+            ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
+            progress = max(progress, float(s))
+        
+        percent = min(100.0, (progress / g.target_amount * 100.0) if g.target_amount > 0 else 0.0)
+        remaining = max(0, g.target_amount - progress)
+        
+        # ╨á╨░╤ü╤ü╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╨┤╨╜╨╕ ╨┤╨╛ ╤å╨╡╨╗╨╕ ╨╡╤ü╨╗╨╕ ╨╡╤ü╤é╤î target_date
+        days_remaining = None
+        if g.target_date:
+            days_remaining = (g.target_date.date() - date.today()).days
+        
+        goals_progress.append({
+            "goal": g,
+            "progress": progress,
+            "percent": percent,
+            "remaining": remaining,
+            "days_remaining": days_remaining
+        })
+    currency = app.config.get("DEFAULT_CURRENCY", "RUB")
+    return render_template("goals.html", goals_progress=goals_progress, currency=currency)
 
 @app.route("/goals/add", methods=["GET","POST"])
 @login_required
 def add_goal():
-    user_id = flask_g.user.id
     form = GoalForm()
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    choices = [(0, "— не привязывать —")] + [(c.id, c.name) for c in categories]
+    categories = Category.query.order_by(Category.name).all()
+    choices = [(0, "ΓÇö ╨╜╨╡ ╨┐╤Ç╨╕╨▓╤Å╨╖╤ï╨▓╨░╤é╤î ΓÇö")] + [(c.id, c.name) for c in categories]
     form.category.choices = choices
     if form.validate_on_submit():
         cat = None
@@ -1179,23 +1222,23 @@ def add_goal():
             category = cat,
             target_date = datetime.combine(form.target_date.data, datetime.min.time()) if form.target_date.data else None,
             notes = form.notes.data,
-            active = form.active.data,
-            user_id = user_id
+            active = form.active.data
         )
+        if getattr(flask_g, 'user', None):
+            g.user_id = flask_g.user.id
         db.session.add(g)
         db.session.commit()
-        flash("Цель создана", "success")
+        flash("╨ª╨╡╨╗╤î ╤ü╨╛╨╖╨┤╨░╨╜╨░", "success")
         return redirect(url_for("goals"))
     return render_template("add_goal.html", form=form)
 
 @app.route("/goals/edit/<int:goal_id>", methods=["GET","POST"])
 @login_required
 def edit_goal(goal_id):
-    user_id = flask_g.user.id
-    g = Goal.query.filter_by(id=goal_id, user_id=user_id).first_or_404()
+    g = Goal.query.get_or_404(goal_id)
     form = GoalForm(obj=g)
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    choices = [(0, "— не привязывать —")] + [(c.id, c.name) for c in categories]
+    categories = Category.query.order_by(Category.name).all()
+    choices = [(0, "ΓÇö ╨╜╨╡ ╨┐╤Ç╨╕╨▓╤Å╨╖╤ï╨▓╨░╤é╤î ΓÇö")] + [(c.id, c.name) for c in categories]
     form.category.choices = choices
     if g.target_date:
         form.target_date.data = g.target_date.date()
@@ -1214,7 +1257,7 @@ def edit_goal(goal_id):
         g.active = form.active.data
         
         db.session.commit()
-        flash("Цель обновлена", "success")
+        flash("╨ª╨╡╨╗╤î ╨╛╨▒╨╜╨╛╨▓╨╗╨╡╨╜╨░", "success")
         return redirect(url_for("goals"))
     
     return render_template("add_goal.html", form=form, goal=g, edit=True)
@@ -1222,66 +1265,74 @@ def edit_goal(goal_id):
 @app.route("/goals/delete/<int:goal_id>", methods=["POST"])
 @login_required
 def delete_goal(goal_id):
-    user_id = flask_g.user.id
-    g = Goal.query.filter_by(id=goal_id, user_id=user_id).first_or_404()
+    g = Goal.query.get_or_404(goal_id)
     db.session.delete(g)
     db.session.commit()
-    flash("Цель удалена", "success")
+    flash("╨ª╨╡╨╗╤î ╤â╨┤╨░╨╗╨╡╨╜╨░", "success")
     return redirect(url_for("goals"))
 
+# Accounts
 @app.route("/accounts")
-@login_required
 def accounts():
-    user_id = flask_g.user.id
-    accs = Account.query.filter_by(user_id=user_id).order_by(Account.id.desc()).all()
+    accs = Account.query.filter_by(user_id=flask_g.user.id).order_by(Account.id.desc()).all() if getattr(flask_g, 'user', None) else Account.query.order_by(Account.id.desc()).all()
     return render_template("accounts.html", accounts=accs)
 
 @app.route("/accounts/add", methods=["GET","POST"])
 @login_required
 def add_account():
-    user_id = flask_g.user.id
     form = AccountForm()
     if form.validate_on_submit():
         acc = Account(
             name=form.name.data.strip(),
             balance=form.balance.data or 0.0,
             currency=form.currency.data,
-            notes=form.notes.data,
-            user_id=user_id
+            notes=form.notes.data
         )
+        if getattr(flask_g, 'user', None):
+            acc.user_id = flask_g.user.id
         db.session.add(acc)
         db.session.commit()
-        flash("Счёт создан", "success")
+        flash("╨í╤ç╤æ╤é ╤ü╨╛╨╖╨┤╨░╨╜", "success")
         return redirect(url_for("accounts"))
     return render_template("add_account.html", form=form)
 
 @app.route("/accounts/delete/<int:acc_id>", methods=["POST"])
 @login_required
 def delete_account(acc_id):
-    user_id = flask_g.user.id
-    acc = Account.query.filter_by(id=acc_id, user_id=user_id).first_or_404()
+    acc = Account.query.get_or_404(acc_id)
     acc.is_active = False
     db.session.commit()
-    flash("Счёт деактивирован", "success")
+    flash("╨í╤ç╤æ╤é ╨┤╨╡╨░╨║╤é╨╕╨▓╨╕╤Ç╨╛╨▓╨░╨╜", "success")
     return redirect(url_for("accounts"))
 
+# Budgets
 @app.route("/budgets")
-@login_required
 def budgets():
-    user_id = flask_g.user.id
     today = date.today()
-    budgets_list = Budget.query.filter_by(is_active=True, user_id=user_id).order_by(Budget.id.desc()).all()
+    budgets_list = Budget.query.filter_by(is_active=True).order_by(Budget.id.desc()).all() if not getattr(flask_g, 'user', None) else Budget.query.filter_by(is_active=True, user_id=flask_g.user.id).order_by(Budget.id.desc()).all()
     budgets_data = []
-    # --- (Budgets logic implementation needed) ---
-    flash("Budgets logic needs to be fully implemented with user_id.", "info")
-    return render_template("budgets.html", budgets_data=budgets_data, currency=app.config.get("DEFAULT_CURRENCY", "RUB"))
+    for b in budgets_list:
+        spent = db.session.query(Transaction).filter(
+            Transaction.category_id == b.category_id,
+            Transaction.type == TransactionType.expense,
+            Transaction.date >= b.period_start,
+            Transaction.date <= b.period_end
+        ).with_entities(db.func.sum(Transaction.amount)).scalar() or 0.0
+        percent = min(100.0, (spent / b.amount * 100.0) if b.amount > 0 else 0.0)
+        budgets_data.append({
+            "budget": b,
+            "spent": spent,
+            "remaining": max(0, b.amount - spent),
+            "percent": percent
+        })
+    currency = app.config.get("DEFAULT_CURRENCY", "RUB")
+    return render_template("budgets.html", budgets_data=budgets_data, currency=currency)
 
 @app.route("/budgets/add", methods=["GET","POST"])
 @login_required
 def add_budget():
-    user_id = flask_g.user.id
     form = BudgetForm()
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
+    categories = Category.query.order_by(Category.name).all()
     form.category.choices = [(c.id, c.name) for c in categories]
     
     if form.validate_on_submit():
@@ -1289,15 +1340,16 @@ def add_budget():
             category_id=form.category.data,
             amount=form.amount.data,
             period_start=datetime.combine(form.period_start.data, datetime.min.time()),
-            period_end=datetime.combine(form.period_end.data, datetime.min.time()),
-            user_id=user_id
+            period_end=datetime.combine(form.period_end.data, datetime.min.time())
         )
+        if getattr(flask_g, 'user', None):
+            b.user_id = flask_g.user.id
         db.session.add(b)
         db.session.commit()
-        flash("Бюджет создан", "success")
+        flash("╨æ╤Ä╨┤╨╢╨╡╤é ╤ü╨╛╨╖╨┤╨░╨╜", "success")
         return redirect(url_for("budgets"))
     
-    # Set default values
+    # ╨ú╤ü╤é╨░╨╜╨░╨▓╨╗╨╕╨▓╨░╨╡╨╝ ╨╖╨╜╨░╤ç╨╡╨╜╨╕╤Å ╨┐╨╛ ╤â╨╝╨╛╨╗╤ç╨░╨╜╨╕╤Ä
     if request.method == "GET":
         form.period_start.data = date.today().replace(day=1)
         next_month = (date.today().replace(day=1) + relativedelta(months=1)) - timedelta(days=1)
@@ -1308,21 +1360,19 @@ def add_budget():
 @app.route("/budgets/delete/<int:budget_id>", methods=["POST"])
 @login_required
 def delete_budget(budget_id):
-    user_id = flask_g.user.id
-    b = Budget.query.filter_by(id=budget_id, user_id=user_id).first_or_404()
+    b = Budget.query.get_or_404(budget_id)
     b.is_active = False
     db.session.commit()
-    flash("Бюджет удалён", "success")
+    flash("╨æ╤Ä╨┤╨╢╨╡╤é ╤â╨┤╨░╨╗╤æ╨╜", "success")
     return redirect(url_for("budgets"))
 
+# Debts
 @app.route("/debts")
-@login_required
 def debts():
-    user_id = flask_g.user.id
-    debts_list = Debt.query.filter_by(is_active=True, user_id=user_id).order_by(Debt.id.desc()).all()
+    debts_list = Debt.query.filter_by(is_active=True).order_by(Debt.id.desc()).all()
     today = date.today()
     
-    # Calculate statistics
+    # ╨ƒ╨╛╨┤╤ü╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╤ü╤é╨░╤é╨╕╤ü╤é╨╕╨║╤â
     total_debt = sum(d.remaining_amount for d in debts_list if not d.is_owed_to_me)
     total_owed = sum(d.remaining_amount for d in debts_list if d.is_owed_to_me)
     upcoming_payments = [d for d in debts_list if d.payment_date and d.payment_date.date() >= today]
@@ -1335,46 +1385,68 @@ def debts():
 @app.route("/debts/add", methods=["GET","POST"])
 @login_required
 def add_debt():
-    user_id = flask_g.user.id
     form = DebtForm()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
-    form.account.choices = [(0, "— не привязывать —")] + [(a.id, a.name) for a in accounts]
+    accounts = Account.query.filter_by(is_active=True).order_by(Account.name).all()
+    form.account.choices = [(0, "ΓÇö ╨╜╨╡ ╨┐╤Ç╨╕╨▓╤Å╨╖╤ï╨▓╨░╤é╤î ΓÇö")] + [(a.id, a.name) for a in accounts]
     
     if form.validate_on_submit():
         acc = None
         if form.account.data and form.account.data != 0:
             acc = Account.query.get(form.account.data)
         
-        # Debt processing logic (same as before, now includes user_id)
+        # ╨₧╨▒╤Ç╨░╨▒╨╛╤é╨║╨░ ╨▓ ╨╖╨░╨▓╨╕╤ü╨╕╨╝╨╛╤ü╤é╨╕ ╨╛╤é ╤é╨╕╨┐╨░ ╨┤╨╛╨╗╨│╨░
         if form.debt_type.data == "credit_card":
+            # ╨ö╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï: amount = credit_limit, paid_amount = 0
             credit_limit = form.credit_limit.data or form.amount.data
             if not credit_limit:
-                flash("Укажите лимит кредитной карты", "danger")
+                flash("╨ú╨║╨░╨╢╨╕╤é╨╡ ╨╗╨╕╨╝╨╕╤é ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï", "danger")
                 currency = app.config.get("DEFAULT_CURRENCY", "RUB")
                 return render_template("add_debt.html", form=form, accounts=accounts, currency=currency)
             
             current_balance = form.current_balance.data if form.current_balance.data is not None else 0.0
             
             d = Debt(
-                name=form.name.data.strip(), debt_type=DebtType.credit_card, amount=credit_limit, paid_amount=0.0, 
-                current_balance=current_balance, credit_limit=credit_limit, is_owed_to_me=form.is_owed_to_me.data, 
-                interest_rate=form.interest_rate.data, payment_date=datetime.combine(form.payment_date.data, datetime.min.time()) if form.payment_date.data else None, 
-                payment_amount=form.payment_amount.data, min_payment=form.min_payment.data, due_date=None, 
-                account=acc, notes=form.notes.data, is_active=form.is_active.data, user_id=user_id
+                name=form.name.data.strip(),
+                debt_type=DebtType.credit_card,
+                amount=credit_limit,  # amount = credit_limit ╨┤╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï
+                paid_amount=0.0,  # paid_amount ╨╜╨╡ ╨╕╤ü╨┐╨╛╨╗╤î╨╖╤â╨╡╤é╤ü╤Å ╨┤╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï
+                current_balance=current_balance,
+                credit_limit=credit_limit,
+                is_owed_to_me=form.is_owed_to_me.data,
+                interest_rate=form.interest_rate.data,
+                payment_date=datetime.combine(form.payment_date.data, datetime.min.time()) if form.payment_date.data else None,
+                payment_amount=form.payment_amount.data,
+                min_payment=form.min_payment.data,
+                due_date=None,  # ╨ö╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï ╨╜╨╡╤é ╤ü╤Ç╨╛╨║╨░ ╨╛╨║╨╛╨╜╤ç╨░╨╜╨╕╤Å
+                account=acc,
+                notes=form.notes.data,
+                is_active=form.is_active.data
             )
         else:
+            # ╨ö╨╗╤Å ╨╛╨▒╤ï╤ç╨╜╨╛╨│╨╛ ╨┤╨╛╨╗╨│╨░ ╨╕╨╗╨╕ ╨║╤Ç╨╡╨┤╨╕╤é╨░
             d = Debt(
-                name=form.name.data.strip(), debt_type=DebtType[form.debt_type.data], amount=form.amount.data, paid_amount=form.paid_amount.data or 0.0, 
-                current_balance=None, credit_limit=form.credit_limit.data if form.debt_type.data == "credit" else None, is_owed_to_me=form.is_owed_to_me.data, 
-                interest_rate=form.interest_rate.data, payment_date=datetime.combine(form.payment_date.data, datetime.min.time()) if form.payment_date.data else None, 
-                payment_amount=form.payment_amount.data, min_payment=form.min_payment.data, 
-                due_date=datetime.combine(form.due_date.data, datetime.min.time()) if form.due_date.data else None, 
-                account=acc, notes=form.notes.data, is_active=form.is_active.data, user_id=user_id
+                name=form.name.data.strip(),
+                debt_type=DebtType[form.debt_type.data],
+                amount=form.amount.data,
+                paid_amount=form.paid_amount.data or 0.0,
+                current_balance=None,  # ╨¥╨╡ ╨╕╤ü╨┐╨╛╨╗╤î╨╖╤â╨╡╤é╤ü╤Å ╨┤╨╗╤Å ╨┤╨╛╨╗╨│╨░/╨║╤Ç╨╡╨┤╨╕╤é╨░
+                credit_limit=form.credit_limit.data if form.debt_type.data == "credit" else None,
+                is_owed_to_me=form.is_owed_to_me.data,
+                interest_rate=form.interest_rate.data,
+                payment_date=datetime.combine(form.payment_date.data, datetime.min.time()) if form.payment_date.data else None,
+                payment_amount=form.payment_amount.data,
+                min_payment=form.min_payment.data,
+                due_date=datetime.combine(form.due_date.data, datetime.min.time()) if form.due_date.data else None,
+                account=acc,
+                notes=form.notes.data,
+                is_active=form.is_active.data
             )
         
+        if getattr(flask_g, 'user', None):
+            d.user_id = flask_g.user.id
         db.session.add(d)
         db.session.commit()
-        flash("Долг/кредит добавлен", "success")
+        flash("╨ö╨╛╨╗╨│/╨║╤Ç╨╡╨┤╨╕╤é ╨┤╨╛╨▒╨░╨▓╨╗╨╡╨╜", "success")
         return redirect(url_for("debts"))
     
     currency = app.config.get("DEFAULT_CURRENCY", "RUB")
@@ -1383,21 +1455,24 @@ def add_debt():
 @app.route("/debts/edit/<int:debt_id>", methods=["GET","POST"])
 @login_required
 def edit_debt(debt_id):
-    user_id = flask_g.user.id
-    d = Debt.query.filter_by(id=debt_id, user_id=user_id).first_or_404()
+    d = Debt.query.get_or_404(debt_id)
     form = DebtForm(obj=d)
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
-    form.account.choices = [(0, "— не привязывать —")] + [(a.id, a.name) for a in accounts]
+    accounts = Account.query.filter_by(is_active=True).order_by(Account.name).all()
+    form.account.choices = [(0, "ΓÇö ╨╜╨╡ ╨┐╤Ç╨╕╨▓╤Å╨╖╤ï╨▓╨░╤é╤î ΓÇö")] + [(a.id, a.name) for a in accounts]
     
     if request.method == "GET":
         form.debt_type.data = d.debt_type.value if d.debt_type else "debt"
-        if d.payment_date: form.payment_date.data = d.payment_date.date()
-        if d.due_date: form.due_date.data = d.due_date.date()
-        if d.account: form.account.data = d.account.id
+        if d.payment_date:
+            form.payment_date.data = d.payment_date.date()
+        if d.due_date:
+            form.due_date.data = d.due_date.date()
+        if d.account:
+            form.account.data = d.account.id
     
     if form.validate_on_submit():
         acc = None
-        if form.account.data and form.account.data != 0: acc = Account.query.get(form.account.data)
+        if form.account.data and form.account.data != 0:
+            acc = Account.query.get(form.account.data)
         
         d.name = form.name.data.strip()
         d.debt_type = DebtType[form.debt_type.data]
@@ -1410,19 +1485,22 @@ def edit_debt(debt_id):
         d.notes = form.notes.data
         d.is_active = form.is_active.data
         
-        # Debt processing logic (same as before)
+        # ╨₧╨▒╤Ç╨░╨▒╨╛╤é╨║╨░ ╨▓ ╨╖╨░╨▓╨╕╤ü╨╕╨╝╨╛╤ü╤é╨╕ ╨╛╤é ╤é╨╕╨┐╨░ ╨┤╨╛╨╗╨│╨░
         if form.debt_type.data == "credit_card":
+            # ╨ö╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï: amount = credit_limit, paid_amount = 0
             credit_limit = form.credit_limit.data or form.amount.data
             if not credit_limit:
-                flash("Укажите лимит кредитной карты", "danger")
-                return render_template("add_debt.html", form=form, debt=d, edit=True, accounts=accounts, currency=app.config.get("DEFAULT_CURRENCY", "RUB"))
+                flash("╨ú╨║╨░╨╢╨╕╤é╨╡ ╨╗╨╕╨╝╨╕╤é ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï", "danger")
+                currency = app.config.get("DEFAULT_CURRENCY", "RUB")
+                return render_template("add_debt.html", form=form, debt=d, edit=True, accounts=accounts, currency=currency)
             
             d.amount = credit_limit
             d.paid_amount = 0.0
             d.current_balance = form.current_balance.data if form.current_balance.data is not None else 0.0
             d.credit_limit = credit_limit
-            d.due_date = None
+            d.due_date = None  # ╨ö╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨╜╨╛╨╣ ╨║╨░╤Ç╤é╤ï ╨╜╨╡╤é ╤ü╤Ç╨╛╨║╨░ ╨╛╨║╨╛╨╜╤ç╨░╨╜╨╕╤Å
         else:
+            # ╨ö╨╗╤Å ╨╛╨▒╤ï╤ç╨╜╨╛╨│╨╛ ╨┤╨╛╨╗╨│╨░ ╨╕╨╗╨╕ ╨║╤Ç╨╡╨┤╨╕╤é╨░
             d.amount = form.amount.data
             d.paid_amount = form.paid_amount.data or 0.0
             d.current_balance = None
@@ -1430,36 +1508,35 @@ def edit_debt(debt_id):
             d.due_date = datetime.combine(form.due_date.data, datetime.min.time()) if form.due_date.data else None
         
         db.session.commit()
-        flash("Долг/кредит обновлён", "success")
+        flash("╨ö╨╛╨╗╨│/╨║╤Ç╨╡╨┤╨╕╤é ╨╛╨▒╨╜╨╛╨▓╨╗╤æ╨╜", "success")
         return redirect(url_for("debts"))
     
     currency = app.config.get("DEFAULT_CURRENCY", "RUB")
     return render_template("add_debt.html", form=form, debt=d, edit=True, accounts=accounts, currency=currency)
 
 @app.route("/debts/<int:debt_id>")
-@login_required
 def debt_detail(debt_id):
-    user_id = flask_g.user.id
-    d = Debt.query.filter_by(id=debt_id, user_id=user_id).first_or_404()
+    d = Debt.query.get_or_404(debt_id)
     currency = app.config.get("DEFAULT_CURRENCY", "RUB")
     today = date.today()
     
-    days_until_payment = (d.payment_date.date() - today).days if d.payment_date else None
+    # ╨á╨░╤ü╤ü╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╨┤╨╜╨╕ ╨┤╨╛ ╨┐╨╗╨░╤é╨╡╨╢╨░
+    days_until_payment = None
+    if d.payment_date:
+        days_until_payment = (d.payment_date.date() - today).days
     
     return render_template("debt_detail.html", debt=d, currency=currency, today=today, days_until_payment=days_until_payment)
 
 @app.route("/debts/<int:debt_id>/make-payment", methods=["POST"])
 @login_required
 def make_payment(debt_id):
-    user_id = flask_g.user.id
-    d = Debt.query.filter_by(id=debt_id, user_id=user_id).first_or_404()
-    
+    d = Debt.query.get_or_404(debt_id)
     payment_amount = float(request.form.get('amount', 0))
     payment_date = request.form.get('date')
     create_transaction = request.form.get('create_transaction') == 'on'
     
     if payment_amount <= 0:
-        flash("Сумма платежа должна быть больше 0", "danger")
+        flash("╨í╤â╨╝╨╝╨░ ╨┐╨╗╨░╤é╨╡╨╢╨░ ╨┤╨╛╨╗╨╢╨╜╨░ ╨▒╤ï╤é╤î ╨▒╨╛╨╗╤î╤ê╨╡ 0", "danger")
         return redirect(url_for("debt_detail", debt_id=debt_id))
     
     try:
@@ -1467,174 +1544,227 @@ def make_payment(debt_id):
     except:
         payment_date_obj = datetime.now()
     
-    # Update debt balance
+    # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨▒╨░╨╗╨░╨╜╤ü ╨┤╨╛╨╗╨│╨░
     if d.debt_type == DebtType.credit_card:
+        # ╨ö╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨║╨╕ ╤â╨╝╨╡╨╜╤î╤ê╨░╨╡╨╝ ╤é╨╡╨║╤â╤ë╨╕╨╣ ╨▒╨░╨╗╨░╨╜╤ü
         d.current_balance = (d.current_balance or 0) - payment_amount
-        if d.current_balance < 0: d.current_balance = 0
+        if d.current_balance < 0:
+            d.current_balance = 0
     else:
+        # ╨ö╨╗╤Å ╨║╤Ç╨╡╨┤╨╕╤é╨░/╨┤╨╛╨╗╨│╨░ ╤â╨▓╨╡╨╗╨╕╤ç╨╕╨▓╨░╨╡╨╝ ╨▓╤ï╨┐╨╗╨░╤ç╨╡╨╜╨╜╤â╤Ä ╤ü╤â╨╝╨╝╤â
         d.paid_amount = (d.paid_amount or 0) + payment_amount
-        if d.paid_amount > d.amount: d.paid_amount = d.amount
+        if d.paid_amount > d.amount:
+            d.paid_amount = d.amount
     
-    # Create transaction if needed
+    # ╨í╨╛╨╖╨┤╨░╤æ╨╝ ╤é╤Ç╨░╨╜╨╖╨░╨║╤å╨╕╤Ä, ╨╡╤ü╨╗╨╕ ╨╜╤â╨╢╨╜╨╛
     if create_transaction:
-        category = Category.query.filter_by(name="Погашение долга", user_id=user_id).first()
+        # ╨¥╨░╤à╨╛╨┤╨╕╨╝ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╤Ä "╨ƒ╨╛╨│╨░╤ê╨╡╨╜╨╕╨╡ ╨┤╨╛╨╗╨│╨░" ╨╕╨╗╨╕ ╤ü╨╛╨╖╨┤╨░╤æ╨╝
+        # Prefer a user-specific category if user is logged in
+        if getattr(flask_g, 'user', None):
+            category = Category.query.filter_by(name="╨ƒ╨╛╨│╨░╤ê╨╡╨╜╨╕╨╡ ╨┤╨╛╨╗╨│╨░", user_id=flask_g.user.id).first()
+        else:
+            category = Category.query.filter_by(name="╨ƒ╨╛╨│╨░╤ê╨╡╨╜╨╕╨╡ ╨┤╨╛╨╗╨│╨░").first()
         if not category:
-            category = Category(name="Погашение долга", color="#f85149", user_id=user_id)
+            category = Category(name="╨ƒ╨╛╨│╨░╤ê╨╡╨╜╨╕╨╡ ╨┤╨╛╨╗╨│╨░", color="#f85149")
+            if getattr(flask_g, 'user', None):
+                category.user_id = flask_g.user.id
             db.session.add(category)
         
-        t = Transaction(date=payment_date_obj, amount=payment_amount, type=TransactionType.expense, category=category, account=d.account, note=f"Платеж по {d.name}", user_id=user_id)
+        t = Transaction(
+            date=payment_date_obj,
+            amount=payment_amount,
+            type=TransactionType.expense,
+            category=category,
+            account=d.account,
+            note=f"╨ƒ╨╗╨░╤é╨╡╨╢ ╨┐╨╛ {d.name}"
+        )
+        if getattr(flask_g, 'user', None):
+            t.user_id = flask_g.user.id
         db.session.add(t)
         
-        if d.account: d.account.balance -= payment_amount
+        # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨▒╨░╨╗╨░╨╜╤ü ╤ü╤ç╤æ╤é╨░, ╨╡╤ü╨╗╨╕ ╨╡╤ü╤é╤î
+        if d.account:
+            d.account.balance -= payment_amount
     
-    # Update next payment date
+    # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨┤╨░╤é╤â ╤ü╨╗╨╡╨┤╤â╤Ä╤ë╨╡╨│╨╛ ╨┐╨╗╨░╤é╨╡╨╢╨░ (╨╡╤ü╨╗╨╕ ╤ì╤é╨╛ ╨▒╤ï╨╗ ╨╖╨░╨┐╨╗╨░╨╜╨╕╤Ç╨╛╨▓╨░╨╜╨╜╤ï╨╣ ╨┐╨╗╨░╤é╤æ╨╢)
     if d.payment_date and d.payment_date.date() == payment_date_obj.date():
-        if d.payment_date: d.payment_date += relativedelta(months=1)
+        # ╨Æ╤ï╤ç╨╕╤ü╨╗╤Å╨╡╨╝ ╤ü╨╗╨╡╨┤╤â╤Ä╤ë╤â╤Ä ╨┤╨░╤é╤â ╨┐╨╗╨░╤é╨╡╨╢╨░ (╨╛╨▒╤ï╤ç╨╜╨╛ ╤ç╨╡╤Ç╨╡╨╖ ╨╝╨╡╤ü╤Å╤å)
+        if d.payment_date:
+            next_payment = d.payment_date + relativedelta(months=1)
+            d.payment_date = next_payment
     
     db.session.commit()
-    flash(f"Платёж {payment_amount:.2f} {app.config.get('DEFAULT_CURRENCY', 'RUB')} зарегистрирован", "success")
+    flash(f"╨ƒ╨╗╨░╤é╤æ╨╢ {payment_amount:.2f} {app.config.get('DEFAULT_CURRENCY', 'RUB')} ╨╖╨░╤Ç╨╡╨│╨╕╤ü╤é╤Ç╨╕╤Ç╨╛╨▓╨░╨╜", "success")
     return redirect(url_for("debt_detail", debt_id=debt_id))
 
 @app.route("/debts/delete/<int:debt_id>", methods=["POST"])
 @login_required
 def delete_debt(debt_id):
-    user_id = flask_g.user.id
-    d = Debt.query.filter_by(id=debt_id, user_id=user_id).first_or_404()
+    d = Debt.query.get_or_404(debt_id)
     db.session.delete(d)
     db.session.commit()
-    flash("Долг удалён", "success")
+    flash("╨ö╨╛╨╗╨│ ╤â╨┤╨░╨╗╤æ╨╜", "success")
     return redirect(url_for("debts"))
 
-# Transaction Templates (User Scoped)
-
+# Transaction Templates
 @app.route("/templates")
-@login_required
 def templates():
-    user_id = flask_g.user.id
-    # Filter templates by user_id or None (for built-in templates)
-    templates_list = TransactionTemplate.query.filter(db.or_(TransactionTemplate.user_id == user_id, TransactionTemplate.user_id == None)).order_by(TransactionTemplate.use_count.desc(), TransactionTemplate.name).all()
+    templates_list = (TransactionTemplate.query.filter(db.or_(TransactionTemplate.user_id == None, TransactionTemplate.user_id == flask_g.user.id)).order_by(TransactionTemplate.use_count.desc(), TransactionTemplate.name).all() if getattr(flask_g, 'user', None) else TransactionTemplate.query.order_by(TransactionTemplate.use_count.desc(), TransactionTemplate.name).all())
     return render_template("templates.html", templates=templates_list)
 
 @app.route("/templates/add", methods=["GET","POST"])
 @login_required
 def add_template():
-    user_id = flask_g.user.id
     form = TransactionTemplateForm()
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
+    categories = Category.query.order_by(Category.name).all()
+    accounts = Account.query.filter_by(is_active=True).order_by(Account.name).all()
     
-    form.category.choices = [(0, "— без категории —")] + [(c.id, c.name) for c in categories]
-    form.account.choices = [(0, "— без счёта —")] + [(a.id, a.name) for a in accounts]
+    form.category.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕ ΓÇö")] + [(c.id, c.name) for c in categories]
+    form.account.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╤ü╤ç╤æ╤é╨░ ΓÇö")] + [(a.id, a.name) for a in accounts]
     
     if form.validate_on_submit():
         cat = None
-        if form.category.data and form.category.data != 0: cat = Category.query.get(form.category.data)
-        acc = None
-        if form.account.data and form.account.data != 0: acc = Account.query.get(form.account.data)
+        if form.category.data and form.category.data != 0:
+            cat = Category.query.get(form.category.data)
         
-        t = TransactionTemplate(name=form.name.data.strip(), amount=form.amount.data, type=TransactionType.income if form.type.data == "income" else TransactionType.expense, category=cat, account=acc, note=form.note.data, user_id=user_id)
+        acc = None
+        if form.account.data and form.account.data != 0:
+            acc = Account.query.get(form.account.data)
+        
+        t = TransactionTemplate(
+            name=form.name.data.strip(),
+            amount=form.amount.data,
+            type=TransactionType.income if form.type.data == "income" else TransactionType.expense,
+            category=cat,
+            account=acc,
+            note=form.note.data
+        )
+        if getattr(flask_g, 'user', None):
+            t.user_id = flask_g.user.id
         db.session.add(t)
         db.session.commit()
-        flash("Шаблон создан", "success")
+        flash("╨¿╨░╨▒╨╗╨╛╨╜ ╤ü╨╛╨╖╨┤╨░╨╜", "success")
         return redirect(url_for("templates"))
     
     return render_template("add_template.html", form=form)
 
-@app.route("/templates/use/<int:template_id>", methods=["POST"])
+@app.route("/templates/use/<int:template_id>", methods=["GET","POST"])
 @login_required
 def use_template(template_id):
-    user_id = flask_g.user.id
-    template = TransactionTemplate.query.filter(TransactionTemplate.id == template_id, db.or_(TransactionTemplate.user_id == user_id, TransactionTemplate.user_id == None)).first_or_404()
+    template = TransactionTemplate.query.get_or_404(template_id)
     template.use_count += 1
     
-    t = Transaction(date=datetime.now(), amount=template.amount, type=template.type, category=template.category, account=template.account, note=template.note, user_id=user_id)
+    # ╨í╨╛╨╖╨┤╨░╤æ╨╝ ╤é╤Ç╨░╨╜╨╖╨░╨║╤å╨╕╤Ä ╨╕╨╖ ╤ê╨░╨▒╨╗╨╛╨╜╨░
+    t = Transaction(
+        date=datetime.now(),
+        amount=template.amount,
+        type=template.type,
+        category=template.category,
+        account=template.account,
+        note=template.note
+    )
     
-    # Update account balance if applicable
+    # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨▒╨░╨╗╨░╨╜╤ü ╤ü╤ç╤æ╤é╨░ ╨╡╤ü╨╗╨╕ ╨╡╤ü╤é╤î
     if template.account:
-        if template.type == TransactionType.income: template.account.balance += template.amount
-        else: template.account.balance -= template.amount
+        if template.type == TransactionType.income:
+            template.account.balance += template.amount
+        else:
+            template.account.balance -= template.amount
     
+    # set ownership: prefer template owner or current user
+    if template.user_id:
+        t.user_id = template.user_id
+    elif getattr(flask_g, 'user', None):
+        t.user_id = flask_g.user.id
     db.session.add(t)
     db.session.commit()
-    flash("Операция создана из шаблона", "success")
+    flash("╨₧╨┐╨╡╤Ç╨░╤å╨╕╤Å ╤ü╨╛╨╖╨┤╨░╨╜╨░ ╨╕╨╖ ╤ê╨░╨▒╨╗╨╛╨╜╨░", "success")
     return redirect(url_for("transactions"))
 
 @app.route("/templates/delete/<int:template_id>", methods=["POST"])
 @login_required
 def delete_template(template_id):
-    user_id = flask_g.user.id
-    t = TransactionTemplate.query.filter(TransactionTemplate.id == template_id, db.or_(TransactionTemplate.user_id == user_id, TransactionTemplate.user_id == None)).first_or_404()
+    t = TransactionTemplate.query.get_or_404(template_id)
     db.session.delete(t)
     db.session.commit()
-    flash("Шаблон удалён", "success")
+    flash("╨¿╨░╨▒╨╗╨╛╨╜ ╤â╨┤╨░╨╗╤æ╨╜", "success")
     return redirect(url_for("templates"))
 
-# Planned Expenses (User Scoped)
-
+# Planned Expenses
 @app.route("/planned")
-@login_required
 def planned_expenses():
-    user_id = flask_g.user.id
     today = date.today()
-    planned = PlannedExpense.query.filter_by(is_completed=False, user_id=user_id).order_by(PlannedExpense.planned_date).all()
-    completed = PlannedExpense.query.filter_by(is_completed=True, user_id=user_id).order_by(PlannedExpense.planned_date.desc()).limit(10).all()
+    if getattr(flask_g, 'user', None):
+        planned = PlannedExpense.query.filter_by(is_completed=False, user_id=flask_g.user.id).order_by(PlannedExpense.planned_date).all()
+        completed = PlannedExpense.query.filter_by(is_completed=True, user_id=flask_g.user.id).order_by(PlannedExpense.planned_date.desc()).limit(10).all()
+    else:
+        planned = PlannedExpense.query.filter_by(is_completed=False).order_by(PlannedExpense.planned_date).all()
+        completed = PlannedExpense.query.filter_by(is_completed=True).order_by(PlannedExpense.planned_date.desc()).limit(10).all()
     return render_template("planned_expenses.html", planned=planned, completed=completed, today=today)
 
 @app.route("/planned/add", methods=["GET","POST"])
 @login_required
 def add_planned_expense():
-    user_id = flask_g.user.id
     form = PlannedExpenseForm()
-    categories = Category.query.filter(db.or_(Category.user_id == user_id, Category.user_id == None)).order_by(Category.name).all()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
+    categories = Category.query.order_by(Category.name).all()
+    accounts = Account.query.filter_by(is_active=True).order_by(Account.name).all()
     
-    form.category.choices = [(0, "— без категории —")] + [(c.id, c.name) for c in categories]
-    form.account.choices = [(0, "— без счёта —")] + [(a.id, a.name) for a in accounts]
+    form.category.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╨║╨░╤é╨╡╨│╨╛╤Ç╨╕╨╕ ΓÇö")] + [(c.id, c.name) for c in categories]
+    form.account.choices = [(0, "ΓÇö ╨▒╨╡╨╖ ╤ü╤ç╤æ╤é╨░ ΓÇö")] + [(a.id, a.name) for a in accounts]
     
     if form.validate_on_submit():
         cat = None
-        if form.category.data and form.category.data != 0: cat = Category.query.get(form.category.data)
-        acc = None
-        if form.account.data and form.account.data != 0: acc = Account.query.get(form.account.data)
+        if form.category.data and form.category.data != 0:
+            cat = Category.query.get(form.category.data)
         
-        p = PlannedExpense(name=form.name.data.strip(), amount=form.amount.data, planned_date=datetime.combine(form.planned_date.data, datetime.min.time()), category=cat, account=acc, note=form.note.data, user_id=user_id)
+        acc = None
+        if form.account.data and form.account.data != 0:
+            acc = Account.query.get(form.account.data)
+        
+        p = PlannedExpense(
+            name=form.name.data.strip(),
+            amount=form.amount.data,
+            planned_date=datetime.combine(form.planned_date.data, datetime.min.time()),
+            category=cat,
+            account=acc,
+            note=form.note.data
+        )
+        if getattr(flask_g, 'user', None):
+            p.user_id = flask_g.user.id
         db.session.add(p)
         db.session.commit()
-        flash("Планируемый расход добавлен", "success")
+        flash("╨ƒ╨╗╨░╨╜╨╕╤Ç╤â╨╡╨╝╤ï╨╣ ╤Ç╨░╤ü╤à╨╛╨┤ ╨┤╨╛╨▒╨░╨▓╨╗╨╡╨╜", "success")
         return redirect(url_for("planned_expenses"))
     
-    if request.method == "GET": form.planned_date.data = date.today()
+    if request.method == "GET":
+        form.planned_date.data = date.today()
     
     return render_template("add_planned_expense.html", form=form)
 
 @app.route("/planned/complete/<int:planned_id>", methods=["POST"])
 @login_required
 def complete_planned_expense(planned_id):
-    user_id = flask_g.user.id
-    p = PlannedExpense.query.filter_by(id=planned_id, user_id=user_id).first_or_404()
+    p = PlannedExpense.query.get_or_404(planned_id)
     p.is_completed = True
     db.session.commit()
-    flash("Планируемый расход отмечен как выполненный", "success")
+    flash("╨ƒ╨╗╨░╨╜╨╕╤Ç╤â╨╡╨╝╤ï╨╣ ╤Ç╨░╤ü╤à╨╛╨┤ ╨╛╤é╨╝╨╡╤ç╨╡╨╜ ╨║╨░╨║ ╨▓╤ï╨┐╨╛╨╗╨╜╨╡╨╜╨╜╤ï╨╣", "success")
     return redirect(url_for("planned_expenses"))
 
 @app.route("/planned/delete/<int:planned_id>", methods=["POST"])
 @login_required
 def delete_planned_expense(planned_id):
-    user_id = flask_g.user.id
-    p = PlannedExpense.query.filter_by(id=planned_id, user_id=user_id).first_or_404()
+    p = PlannedExpense.query.get_or_404(planned_id)
     db.session.delete(p)
     db.session.commit()
-    flash("Планируемый расход удалён", "success")
+    flash("╨ƒ╨╗╨░╨╜╨╕╤Ç╤â╨╡╨╝╤ï╨╣ ╤Ç╨░╤ü╤à╨╛╨┤ ╤â╨┤╨░╨╗╤æ╨╜", "success")
     return redirect(url_for("planned_expenses"))
 
-# Transfers (User Scoped)
-
+# Transfers
 @app.route("/transfer", methods=["GET","POST"])
 @login_required
 def transfer():
-    user_id = flask_g.user.id
     form = TransferForm()
-    accounts = Account.query.filter_by(is_active=True, user_id=user_id).order_by(Account.name).all()
+    accounts = Account.query.filter_by(is_active=True).order_by(Account.name).all()
     
     form.from_account.choices = [(a.id, a.name) for a in accounts]
     form.to_account.choices = [(a.id, a.name) for a in accounts]
@@ -1644,77 +1774,90 @@ def transfer():
         to_acc = Account.query.get(form.to_account.data)
         
         if from_acc.id == to_acc.id:
-            flash("Нельзя переводить на тот же счёт", "danger")
+            flash("╨¥╨╡╨╗╤î╨╖╤Å ╨┐╨╡╤Ç╨╡╨▓╨╛╨┤╨╕╤é╤î ╨╜╨░ ╤é╨╛╤é ╨╢╨╡ ╤ü╤ç╤æ╤é", "danger")
             return render_template("transfer.html", form=form)
         
         if from_acc.balance < form.amount.data:
-            flash("Недостаточно средств на счёте", "danger")
+            flash("╨¥╨╡╨┤╨╛╤ü╤é╨░╤é╨╛╤ç╨╜╨╛ ╤ü╤Ç╨╡╨┤╤ü╤é╨▓ ╨╜╨░ ╤ü╤ç╤æ╤é╨╡", "danger")
             return render_template("transfer.html", form=form)
         
-        # Create two transactions: expense from and income to account
-        expense = Transaction(date=datetime.combine(form.date.data, datetime.min.time()), amount=form.amount.data, type=TransactionType.expense, account=from_acc, note=f"Перевод на {to_acc.name}" + (f": {form.note.data}" if form.note.data else ""), user_id=user_id)
-        income = Transaction(date=datetime.combine(form.date.data, datetime.min.time()), amount=form.amount.data, type=TransactionType.income, account=to_acc, note=f"Перевод со счёта {from_acc.name}" + (f": {form.note.data}" if form.note.data else ""), user_id=user_id)
+        # ╨í╨╛╨╖╨┤╨░╤æ╨╝ ╨┤╨▓╨╡ ╤é╤Ç╨░╨╜╨╖╨░╨║╤å╨╕╨╕: ╤Ç╨░╤ü╤à╨╛╨┤ ╤ü╨╛ ╤ü╤ç╤æ╤é╨░ ╨╕ ╨┤╨╛╤à╨╛╨┤ ╨╜╨░ ╤ü╤ç╤æ╤é
+        expense = Transaction(
+            date=datetime.combine(form.date.data, datetime.min.time()),
+            amount=form.amount.data,
+            type=TransactionType.expense,
+            account=from_acc,
+            note=f"╨ƒ╨╡╤Ç╨╡╨▓╨╛╨┤ ╨╜╨░ {to_acc.name}" + (f": {form.note.data}" if form.note.data else "")
+        )
         
-        # Update balances
+        income = Transaction(
+            date=datetime.combine(form.date.data, datetime.min.time()),
+            amount=form.amount.data,
+            type=TransactionType.income,
+            account=to_acc,
+            note=f"╨ƒ╨╡╤Ç╨╡╨▓╨╛╨┤ ╤ü╨╛ ╤ü╤ç╤æ╤é╨░ {from_acc.name}" + (f": {form.note.data}" if form.note.data else "")
+        )
+        
+        # ╨₧╨▒╨╜╨╛╨▓╨╗╤Å╨╡╨╝ ╨▒╨░╨╗╨░╨╜╤ü╤ï
         from_acc.balance -= form.amount.data
         to_acc.balance += form.amount.data
         
+        if getattr(flask_g, 'user', None):
+            expense.user_id = flask_g.user.id
+            income.user_id = flask_g.user.id
         db.session.add(expense)
         db.session.add(income)
         db.session.commit()
-        flash("Перевод выполнен", "success")
+        flash("╨ƒ╨╡╤Ç╨╡╨▓╨╛╨┤ ╨▓╤ï╨┐╨╛╨╗╨╜╨╡╨╜", "success")
         return redirect(url_for("transactions"))
     
-    if request.method == "GET": form.date.data = date.today()
+    if request.method == "GET":
+        form.date.data = date.today()
     
     return render_template("transfer.html", form=form)
 
-# Tags (User Scoped)
-
+# Tags
 @app.route("/tags")
-@login_required
 def tags():
-    user_id = flask_g.user.id
-    tags_list = Tag.query.filter(db.or_(Tag.user_id == user_id, Tag.user_id == None)).order_by(Tag.name).all()
+    tags_list = Tag.query.filter(db.or_(Tag.user_id == None, Tag.user_id == flask_g.user.id)).order_by(Tag.name).all() if getattr(flask_g, 'user', None) else Tag.query.order_by(Tag.name).all()
     return render_template("tags.html", tags=tags_list)
 
 @app.route("/tags/add", methods=["GET","POST"])
 @login_required
 def add_tag():
-    user_id = flask_g.user.id
     form = TagForm()
     if form.validate_on_submit():
-        t = Tag(name=form.name.data.strip(), color=form.color.data or "#8b5cf6", user_id=user_id)
+        t = Tag(
+            name=form.name.data.strip(),
+            color=form.color.data or "#8b5cf6"
+        )
+        if getattr(flask_g, 'user', None):
+            t.user_id = flask_g.user.id
         db.session.add(t)
         db.session.commit()
-        flash("Тег создан", "success")
+        flash("╨ó╨╡╨│ ╤ü╨╛╨╖╨┤╨░╨╜", "success")
         return redirect(url_for("tags"))
     return render_template("add_tag.html", form=form)
 
 @app.route("/tags/delete/<int:tag_id>", methods=["POST"])
 @login_required
 def delete_tag(tag_id):
-    user_id = flask_g.user.id
-    t = Tag.query.filter(Tag.id == tag_id, db.or_(Tag.user_id == user_id, Tag.user_id == None)).first_or_404()
+    t = Tag.query.get_or_404(tag_id)
     db.session.delete(t)
     db.session.commit()
-    flash("Тег удалён", "success")
+    flash("╨ó╨╡╨│ ╤â╨┤╨░╨╗╤æ╨╜", "success")
     return redirect(url_for("tags"))
 
-# Notifications (User Scoped)
-
+# Notifications
 @app.route("/notifications")
-@login_required
 def notifications():
-    user_id = flask_g.user.id
-    notifs = Notification.query.filter_by(user_id=user_id).order_by(Notification.created_at.desc()).all()
+    notifs = Notification.query.order_by(Notification.created_at.desc()).all()
     return render_template("notifications.html", notifications=notifs)
 
 @app.route("/notifications/read/<int:notif_id>", methods=["POST"])
 @login_required
 def mark_notification_read(notif_id):
-    user_id = flask_g.user.id
-    notif = Notification.query.filter_by(id=notif_id, user_id=user_id).first_or_404()
+    notif = Notification.query.get_or_404(notif_id)
     notif.is_read = True
     db.session.commit()
     return redirect(url_for("notifications"))
@@ -1722,25 +1865,21 @@ def mark_notification_read(notif_id):
 @app.route("/notifications/read-all", methods=["POST"])
 @login_required
 def mark_all_notifications_read():
-    user_id = flask_g.user.id
-    Notification.query.filter_by(user_id=user_id).update({Notification.is_read: True})
+    Notification.query.update({Notification.is_read: True})
     db.session.commit()
-    flash("Все уведомления отмечены как прочитанные", "success")
+    flash("╨Æ╤ü╨╡ ╤â╨▓╨╡╨┤╨╛╨╝╨╗╨╡╨╜╨╕╤Å ╨╛╤é╨╝╨╡╤ç╨╡╨╜╤ï ╨║╨░╨║ ╨┐╤Ç╨╛╤ç╨╕╤é╨░╨╜╨╜╤ï╨╡", "success")
     return redirect(url_for("notifications"))
 
-# Achievements (User Scoped)
-
+# Achievements
 @app.route("/achievements")
-@login_required
 def achievements():
-    user_id = flask_g.user.id
-    achievements_list = Achievement.query.filter_by(user_id=user_id).order_by(Achievement.is_unlocked.desc(), Achievement.created_at).all()
+    achievements_list = Achievement.query.order_by(Achievement.is_unlocked.desc(), Achievement.created_at).all()
     
-    # Calculate statistics for achievements
-    total_transactions = Transaction.query.filter_by(user_id=user_id).count()
-    days_with_transactions = db.session.query(db.func.date(Transaction.date)).filter_by(user_id=user_id).distinct().count()
+    # ╨ƒ╨╛╨┤╤ü╤ç╨╕╤é╤ï╨▓╨░╨╡╨╝ ╤ü╤é╨░╤é╨╕╤ü╤é╨╕╨║╤â ╨┤╨╗╤Å ╨┤╨╛╤ü╤é╨╕╨╢╨╡╨╜╨╕╨╣
+    total_transactions = Transaction.query.count()
+    days_with_transactions = db.session.query(db.func.date(Transaction.date)).distinct().count()
     
-    # Check achievements
+    # ╨ƒ╤Ç╨╛╨▓╨╡╤Ç╤Å╨╡╨╝ ╨┤╨╛╤ü╤é╨╕╨╢╨╡╨╜╨╕╤Å
     for ach in achievements_list:
         if not ach.is_unlocked:
             if ach.condition_type == 'transactions_count' and total_transactions >= ach.condition_value:
@@ -1754,3 +1893,74 @@ def achievements():
     
     return render_template("achievements.html", achievements=achievements_list, 
                          total_transactions=total_transactions, days_with_transactions=days_with_transactions)
+
+
+
+
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    from .forms import RegisterForm
+    form = RegisterForm()
+    if form.validate_on_submit():
+        username = form.username.data.strip()
+        username_lc = username.lower()
+        if User.query.filter(func.lower(User.username) == username_lc).first():
+            flash('╨ƒ╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤î ╤ü ╤é╨░╨║╨╕╨╝ ╨╕╨╝╨╡╨╜╨╡╨╝ ╤â╨╢╨╡ ╤ü╤â╤ë╨╡╤ü╤é╨▓╤â╨╡╤é', 'danger')
+            return render_template('register.html', form=form)
+        email = form.email.data.strip().lower() if form.email.data else None
+        if email and User.query.filter(func.lower(User.email) == email).first():
+            flash('Email ╤â╨╢╨╡ ╨╕╤ü╨┐╨╛╨╗╤î╨╖╤â╨╡╤é╤ü╤Å', 'danger')
+            return render_template('register.html', form=form)
+        u = User(username=username, email=email)
+        u.set_password(form.password.data)
+        try:
+            db.session.add(u)
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash('╨¥╨╡ ╤â╨┤╨░╨╗╨╛╤ü╤î ╤ü╨╛╨╖╨┤╨░╤é╤î ╨┐╨╛╨╗╤î╨╖╨╛╨▓╨░╤é╨╡╨╗╤Å, ╨┐╨╛╨┐╤Ç╨╛╨▒╤â╨╣╤é╨╡ ╨┐╨╛╨╖╨╢╨╡', 'danger')
+            return render_template('register.html', form=form)
+        session.clear()
+        session.permanent = True
+        session['user_id'] = u.id
+        flash('╨á╨╡╨│╨╕╤ü╤é╤Ç╨░╤å╨╕╤Å ╨┐╤Ç╨╛╤ê╨╗╨░ ╤â╤ü╨┐╨╡╤ê╨╜╨╛', 'success')
+        return redirect(url_for('index'))
+    return render_template('register.html', form=form)
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    from .forms import LoginForm
+    form = LoginForm()
+    next_param = request.args.get('next') or request.form.get('next')
+    next_url = next_param if _is_safe_redirect(next_param) else url_for('index')
+    if form.validate_on_submit():
+        username = form.username.data.strip()
+        u = User.query.filter(func.lower(User.username) == username.lower()).first()
+        if not u or not u.check_password(form.password.data):
+            flash('╨¥╨╡╨▓╨╡╤Ç╨╜╤ï╨╡ ╤â╤ç╨╡╤é╨╜╤ï╨╡ ╨┤╨░╨╜╨╜╤ï╨╡', 'danger')
+            return render_template('login.html', form=form, next=next_param)
+        session.clear()
+        session.permanent = True
+        session['user_id'] = u.id
+        flash('╨Æ╤ï ╨▓╨╛╤ê╨╗╨╕ ╨▓ ╤ü╨╕╤ü╤é╨╡╨╝╤â', 'success')
+        return redirect(next_url)
+    return render_template('login.html', form=form, next=next_param)
+
+
+@app.route('/logout')
+def logout():
+    session.pop('user_id', None)
+    flash('╨Æ╤ï ╨▓╤ï╤ê╨╗╨╕ ╨╕╨╖ ╨░╨║╨║╨░╤â╨╜╤é╨░', 'success')
+    return redirect(url_for('index'))
+
+
+@app.route('/account')
+@login_required
+def account():
+    user = flask_g.user
+    tx_count = Transaction.query.filter_by(user_id=user.id).count()
+    acc_count = Account.query.filter_by(user_id=user.id).count()
+    goals_count = Goal.query.filter_by(user_id=user.id).count()
+    return render_template('account.html', user=user, tx_count=tx_count, acc_count=acc_count, goals_count=goals_count)
