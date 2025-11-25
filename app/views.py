@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 from flask import current_app as app, render_template, redirect, url_for, request, flash, send_from_directory, jsonify, session, g as flask_g
 from .models import (db, User, Category, Transaction, TransactionType, Recurring, Frequency, Goal, Account, Budget, Tag, Debt, DebtType,
                     TransactionTemplate, PlannedExpense, Achievement, Notification)
@@ -1965,7 +1964,6 @@ def account():
     acc_count = Account.query.filter_by(user_id=user.id).count()
     goals_count = Goal.query.filter_by(user_id=user.id).count()
     return render_template('account.html', user=user, tx_count=tx_count, acc_count=acc_count, goals_count=goals_count)
-=======
 from flask import current_app as app, render_template, redirect, url_for, request, flash, send_from_directory, jsonify, session, g as flask_g
 from .models import (db, User, Category, Transaction, TransactionType, Recurring, Frequency, Goal, Account, Budget, Tag, Debt, DebtType,
                     TransactionTemplate, PlannedExpense, Achievement, Notification)
@@ -3906,4 +3904,3 @@ def account():
     acc_count = Account.query.filter_by(user_id=user.id).count()
     goals_count = Goal.query.filter_by(user_id=user.id).count()
     return render_template('account.html', user=user, tx_count=tx_count, acc_count=acc_count, goals_count=goals_count)
->>>>>>> e658894 (Fix IndentationError in views.py and improve auth forms)
